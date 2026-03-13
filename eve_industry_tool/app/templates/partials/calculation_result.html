@@ -1,0 +1,135 @@
+{% if error %}
+<div class="alert alert-error">
+    <strong>Erro:</strong> {{ error }}
+</div>
+{% else %}
+<div class="calc-result">
+    <h3>
+        Resultados — {{ runs }} run(s) de {{ item.type_name }}
+        <span class="muted">(ME {{ me_level }}, preços {{ price_source }})</span>
+    </h3>
+
+    {% if missing_prices > 0 and not is_structure %}
+    <div class="alert alert-warning">
+        <strong>{{ missing_prices }} material(is) sem preço (N/A).</strong>
+        {% set region_id = market_source.split(":")[1] | int %}
+        {% if region_id not in [10000002, 10000043, 10000032, 10000030, 10000042] %}
+        <br>Esta região é null-sec ou low-sec: ordens de mercado em
+        <strong>citadelas e estruturas privadas não aparecem</strong> na API pública de região.
+        <br>Para ver preços reais:
+        <ol style="margin: 0.4rem 0 0 1.2rem; padding: 0;">
+            <li>Execute <code>atualizar_estruturas.bat</code> para importar as estruturas acessíveis</li>
+            <li>Selecione a estrutura específica no campo <em>Mercado</em></li>
+        </ol>
+        {% else %}
+        <br>Nenhuma ordem encontrada para esses itens neste mercado.
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- Materials breakdown -->
+    <h4>Materiais</h4>
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Material</th>
+                <th class="align-right">Quantidade</th>
+                <th class="align-right">Preço Unit.</th>
+                <th class="align-right">Total</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for mat in materials %}
+            <tr>
+                <td>{{ mat.name }}</td>
+                <td class="mono align-right">{{ "{:,}".format(mat.quantity) }}</td>
+                <td class="mono align-right">
+                    {% if mat.unit_price %}
+                        {{ "{:,.2f}".format(mat.unit_price) }} ISK
+                    {% else %}
+                        <span class="muted warning">N/A</span>
+                    {% endif %}
+                </td>
+                <td class="mono align-right">{{ "{:,.2f}".format(mat.total_cost) }} ISK</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <!-- Cost breakdown -->
+    <h4>Custos de Produção</h4>
+    <table class="data-table breakdown-table">
+        <tbody>
+            <tr>
+                <td>Custo de Materiais</td>
+                <td class="mono align-right">{{ "{:,.2f}".format(cost_breakdown.material_cost) }} ISK</td>
+            </tr>
+            <tr>
+                <td>
+                    Custo do Job
+                    <span class="muted small">
+                        ({{ (cost_breakdown.system_cost_index * 100) | round(2) }}% índice
+                        + {{ (cost_breakdown.facility_tax * 100) | round(2) }}% facilidade
+                        + {{ (cost_breakdown.scc_surcharge * 100) | round(2) }}% SCC)
+                    </span>
+                </td>
+                <td class="mono align-right">{{ "{:,.2f}".format(cost_breakdown.job_cost) }} ISK</td>
+            </tr>
+            <tr class="subtotal-row">
+                <td><strong>Custo Total de Produção</strong></td>
+                <td class="mono align-right"><strong>{{ "{:,.2f}".format(cost_breakdown.total_cost) }} ISK</strong></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <!-- Profit breakdown -->
+    <h4>Análise de Lucro</h4>
+    <table class="data-table breakdown-table">
+        <tbody>
+            <tr>
+                <td>Receita de Venda</td>
+                <td class="mono align-right">
+                    {% if sell_price %}
+                        {{ "{:,.2f}".format(profit_breakdown.sale_price) }} ISK
+                    {% else %}
+                        <span class="warning">Nenhuma ordem de venda encontrada</span>
+                    {% endif %}
+                </td>
+            </tr>
+            <tr>
+                <td>Custo de Produção</td>
+                <td class="mono align-right danger">
+                    &minus; {{ "{:,.2f}".format(profit_breakdown.production_cost) }} ISK
+                </td>
+            </tr>
+            <tr>
+                <td>Lucro Bruto</td>
+                <td class="mono align-right {% if profit_breakdown.gross_profit >= 0 %}success{% else %}danger{% endif %}">
+                    {{ "{:,.2f}".format(profit_breakdown.gross_profit) }} ISK
+                </td>
+            </tr>
+            <tr>
+                <td>Taxa de Corretagem</td>
+                <td class="mono align-right danger">
+                    &minus; {{ "{:,.2f}".format(profit_breakdown.broker_fee) }} ISK
+                </td>
+            </tr>
+            <tr>
+                <td>Imposto de Venda</td>
+                <td class="mono align-right danger">
+                    &minus; {{ "{:,.2f}".format(profit_breakdown.sales_tax) }} ISK
+                </td>
+            </tr>
+            <tr class="subtotal-row {% if profit_breakdown.net_profit >= 0 %}profit-positive{% else %}profit-negative{% endif %}">
+                <td><strong>Lucro Líquido</strong></td>
+                <td class="mono align-right">
+                    <strong>{{ "{:,.2f}".format(profit_breakdown.net_profit) }} ISK</strong>
+                    <span class="margin-badge {% if profit_breakdown.margin_pct >= 0 %}success{% else %}danger{% endif %}">
+                        {{ profit_breakdown.margin_pct | round(1) }}%
+                    </span>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+{% endif %}

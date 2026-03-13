@@ -1,0 +1,64 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Ambientes virtuais
+.venv/
+venv/
+env/
+ENV/
+
+# Distribuição / build
+dist/
+build/
+*.egg-info/
+*.egg
+
+# ── Banco de dados ────────────────────────────────────────────────────────────
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+log.txt
+logs/
+
+# ── Credenciais e variáveis de ambiente ──────────────────────────────────────
+.env
+.env.*
+!.env.example
+secrets.json
+client_secret*.json
+
+# ── Cache de dados EVE / SDE ──────────────────────────────────────────────────
+*.tar.xz
+*.tar.gz
+*.zip
+sde/
+sde-*
+everef_cache*
+fuzzwork_cache*
+
+# ── IDEs e editores ───────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.suo
+*.user
+*.sublime-project
+*.sublime-workspace
+
+# ── Sistema operacional ───────────────────────────────────────────────────────
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ── pytest / coverage ─────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/

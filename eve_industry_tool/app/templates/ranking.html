@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}Ranking de Lucro &mdash; EVE Industry Tool{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Ranking de Lucro</h1>
+    <p class="subtitle">
+        Itens mais lucrativos para fabricar &mdash; Região {{ region_id }}
+        (padrões, ME 0, impostos padrão).
+    </p>
+</div>
+
+{% if ranking %}
+<div class="card">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Item</th>
+                <th class="align-right">Preço de Venda</th>
+                <th class="align-right">Custo de Produção</th>
+                <th class="align-right">Lucro Líquido</th>
+                <th class="align-right">Margem</th>
+                <th>Ações</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in ranking %}
+            <tr>
+                <td class="muted mono">{{ loop.index }}</td>
+                <td>
+                    <a href="/items/{{ row.item.type_id }}" class="item-link">
+                        {{ row.item.type_name }}
+                    </a>
+                </td>
+                <td class="mono align-right">{{ "{:,.2f}".format(row.sell_price) }} ISK</td>
+                <td class="mono align-right">{{ "{:,.2f}".format(row.production_cost) }} ISK</td>
+                <td class="mono align-right {% if row.net_profit >= 0 %}success{% else %}danger{% endif %}">
+                    {{ "{:,.2f}".format(row.net_profit) }} ISK
+                </td>
+                <td class="mono align-right">
+                    <span class="margin-badge {% if row.margin_pct >= 0 %}success{% else %}danger{% endif %}">
+                        {{ row.margin_pct | round(1) }}%
+                    </span>
+                </td>
+                <td>
+                    <a href="/items/{{ row.item.type_id }}" class="btn btn-small btn-outline">
+                        Detalhes
+                    </a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="card empty-state">
+    <p>Nenhum dado de ranking disponível.</p>
+    <p class="muted">
+        O banco de dados de itens pode estar vazio, ou os preços de mercado não puderam ser obtidos.
+        Certifique-se de que seu banco de dados foi populado com dados do SDE.
+    </p>
+</div>
+{% endif %}
+{% endblock %}

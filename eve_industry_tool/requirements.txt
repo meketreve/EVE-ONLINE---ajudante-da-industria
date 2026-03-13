@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+sqlalchemy[asyncio]
+aiosqlite
+httpx
+jinja2
+python-dotenv
+python-multipart
+itsdangerous

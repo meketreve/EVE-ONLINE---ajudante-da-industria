@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}Fila de Produção &mdash; EVE Industry Tool{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Fila de Produção</h1>
+    {% if character_name %}
+        <p class="subtitle">Fila de <span class="accent">{{ character_name }}</span></p>
+    {% else %}
+        <p class="subtitle muted">
+            <a href="/auth/login" class="accent">Entre</a> para gerenciar sua fila de produção.
+        </p>
+    {% endif %}
+</div>
+
+{% if character_name %}
+    {% if queue_items %}
+    <div class="card">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Item</th>
+                    <th>Quantidade</th>
+                    <th>Status</th>
+                    <th>Adicionado</th>
+                    <th>Ações</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in queue_items %}
+                <tr id="queue-row-{{ entry.id }}">
+                    <td>
+                        <a href="/items/{{ entry.type_id }}" class="item-link">
+                            {{ entry.item_name }}
+                        </a>
+                    </td>
+                    <td class="mono">{{ "{:,}".format(entry.quantity) }}</td>
+                    <td>
+                        <span class="status-badge status-{{ entry.status }}">
+                            {{ entry.status }}
+                        </span>
+                    </td>
+                    <td class="muted small">
+                        {{ entry.created_at.strftime("%Y-%m-%d %H:%M") if entry.created_at else "—" }}
+                    </td>
+                    <td>
+                        <button
+                            class="btn btn-small btn-danger"
+                            hx-delete="/queue/{{ entry.id }}"
+                            hx-target="#queue-row-{{ entry.id }}"
+                            hx-swap="outerHTML"
+                            hx-confirm="Remover {{ entry.item_name }} da fila?"
+                        >
+                            Remover
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="card empty-state">
+        <p>Sua fila de produção está vazia.</p>
+        <p class="muted">
+            Explore os <a href="/items" class="accent">itens</a> e adicione-os à sua fila.
+        </p>
+    </div>
+    {% endif %}
+{% else %}
+<div class="card empty-state">
+    <p>Você precisa estar logado para ver sua fila de produção.</p>
+    <a href="/auth/login" class="btn btn-primary">Entrar com EVE Online</a>
+</div>
+{% endif %}
+{% endblock %}

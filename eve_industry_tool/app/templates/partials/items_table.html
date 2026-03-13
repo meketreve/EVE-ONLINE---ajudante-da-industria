@@ -1,0 +1,60 @@
+{% if items %}
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>Nome</th>
+            <th>Categoria</th>
+            <th>Grupo</th>
+            <th>Volume</th>
+            <th>Ações</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for item in items %}
+        <tr>
+            <td>
+                <a href="/items/{{ item.type_id }}" class="item-link">{{ item.type_name }}</a>
+            </td>
+            <td>
+                {% if item.category_id %}
+                    <span class="badge">Cat {{ item.category_id }}</span>
+                {% else %}
+                    <span class="muted">—</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if item.group_id %}
+                    <span class="muted">{{ item.group_id }}</span>
+                {% else %}
+                    <span class="muted">—</span>
+                {% endif %}
+            </td>
+            <td class="mono">
+                {% if item.volume is not none %}
+                    {{ "%.2f"|format(item.volume) }} m³
+                {% else %}
+                    <span class="muted">—</span>
+                {% endif %}
+            </td>
+            <td>
+                <a href="/items/{{ item.type_id }}" class="btn btn-small btn-outline">
+                    Detalhes
+                </a>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+<p class="result-count">{{ items|length }} item(s) encontrado(s).</p>
+{% else %}
+<div class="empty-state">
+    <p>Nenhum item fabricável encontrado.</p>
+    {% if search or selected_category %}
+        <p class="muted">Tente ajustar sua busca ou filtro de categoria.</p>
+    {% else %}
+        <p class="muted">
+            O banco de dados de itens está vazio. Importe os dados do SDE para popular itens e blueprints.
+        </p>
+    {% endif %}
+</div>
+{% endif %}

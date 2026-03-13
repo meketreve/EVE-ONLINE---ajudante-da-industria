@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard &mdash; EVE Industry Tool{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Dashboard Industrial</h1>
+    {% if character_name %}
+        <p class="subtitle">Bem-vindo de volta, <span class="accent">{{ character_name }}</span></p>
+    {% else %}
+        <p class="subtitle">Entre com sua conta EVE Online para acessar todos os recursos.</p>
+    {% endif %}
+</div>
+
+<div class="dashboard-grid">
+    <a href="/items" class="card card-link">
+        <div class="card-icon">&#128203;</div>
+        <h2>Explorar Itens</h2>
+        <p>Veja todos os itens fabricáveis, filtre por categoria e busque por nome.</p>
+    </a>
+
+    <a href="/queue" class="card card-link">
+        <div class="card-icon">&#9881;</div>
+        <h2>Fila de Produção</h2>
+        <p>Gerencie seus jobs de fabricação planejados e acompanhe o status da produção.</p>
+    </a>
+
+    <a href="/industry/ranking" class="card card-link">
+        <div class="card-icon">&#127942;</div>
+        <h2>Ranking de Lucro</h2>
+        <p>Descubra os itens mais lucrativos para fabricar agora.</p>
+    </a>
+</div>
+
+{% if not character_name %}
+<div class="cta-section">
+    <div class="card cta-card">
+        <h2>Começar</h2>
+        <p>
+            Conecte seu personagem EVE Online para desbloquear dados de mercado, análise de blueprints
+            e cálculos de lucro personalizados.
+        </p>
+        <a href="/auth/login" class="btn btn-primary btn-large">
+            Entrar com EVE Online
+        </a>
+    </div>
+</div>
+{% endif %}
+
+<div class="info-section">
+    <div class="card">
+        <h3>Sobre esta Ferramenta</h3>
+        <ul>
+            <li>Calcule custos exatos de produção incluindo materiais, taxas de job e impostos.</li>
+            <li>Compare preços de hubs públicos (Jita) e mercados de estruturas privadas.</li>
+            <li>Ajuste para níveis de Eficiência de Material (ME) nos seus blueprints.</li>
+            <li>Acompanhe custos de invenção para fabricação T2.</li>
+        </ul>
+    </div>
+</div>
+{% endblock %}

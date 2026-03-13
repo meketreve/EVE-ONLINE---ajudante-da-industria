@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+
+{% block title %}Mercado &mdash; EVE Industry Tool{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Visão Geral do Mercado</h1>
+    <p class="subtitle">
+        Estruturas descobertas &mdash; {{ total_structures }} no total &bull;
+        Cache de preços por região: {{ region_cache_count }} entradas (The Forge)
+    </p>
+    <p class="muted" style="margin-top:0.5rem">
+        Para escanear assets, atualizar estruturas ou limpar cache: <a href="/settings/" class="link">Configurações</a>
+    </p>
+</div>
+
+{% if not character_name %}
+<div class="card empty-state">
+    <p>Entre com EVE Online para descobrir estruturas e atualizar dados de mercado.</p>
+    <a href="/auth/login" class="btn btn-primary">Entrar com EVE Online</a>
+</div>
+{% endif %}
+
+{# ── Structures with market access ───────────────────────────────────────── #}
+{% set accessible = by_status.get("market_accessible", []) %}
+<div class="card">
+    <div class="card-header">
+        <h2>Estruturas com Acesso ao Mercado ({{ accessible | length }})</h2>
+    </div>
+    <div id="refresh-all-status"></div>
+
+    {% if accessible %}
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Estrutura</th>
+                <th>Sistema</th>
+                <th class="align-right">Itens no Mercado</th>
+                <th>Último Crawl</th>
+                <th>Ações</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for entry in accessible %}
+            {% set s = entry.structure %}
+            <tr>
+                <td>{{ s.name or "Desconhecida" }}</td>
+                <td class="muted">{{ s.system_name or "?" }}</td>
+                <td class="mono align-right">{{ entry.snapshot_count }}</td>
+                <td class="muted mono">
+                    {% if s.last_crawled_at %}
+                        {{ s.last_crawled_at.strftime("%Y-%m-%d %H:%M") }}
+                    {% else %}
+                        Nunca
+                    {% endif %}
+                </td>
+                <td>
+                    <button class="btn btn-small btn-outline"
+                            hx-post="/discovery/structure/{{ s.structure_id }}/crawl"
+                            hx-target="#crawl-status-{{ s.structure_id }}"
+                            hx-swap="innerHTML">
+                        Crawl Agora
+                    </button>
+                    <span id="crawl-status-{{ s.structure_id }}" class="muted"></span>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted empty-state">
+        Nenhuma estrutura com acesso ao mercado ainda.
+        {% if character_name %}
+            Use <a href="/settings/" class="link">Configurações</a> para escanear seus assets e descobrir estruturas.
+        {% endif %}
+    </p>
+    {% endif %}
+</div>
+
+{# ── Discovery ────────────────────────────────────────────────────────────── #}
+<div class="card">
+    <div class="card-header">
+        <h2>Descoberta de Estruturas</h2>
+    </div>
+    <div id="discovery-status"></div>
+    <p class="muted">
+        O escaneamento de assets encontra estruturas Upwell (cidadelas, complexos de engenharia, etc.)
+        nos seus assets pessoais e de corporação, e então testa o acesso ao mercado de cada uma.
+        A descoberta roda automaticamente a cada 6 horas em segundo plano.
+        Para iniciar um scan manual, acesse <a href="/settings/" class="link">Configurações</a>.
+    </p>
+
+    {% set resolved = by_status.get("resolved", []) %}
+    {% set discovered = by_status.get("discovered", []) %}
+    {% set denied = by_status.get("market_denied", []) %}
+    {% set inactive = by_status.get("inactive", []) %}
+
+    {% if resolved or discovered %}
+    <h3>Validação Pendente ({{ (resolved | length) + (discovered | length) }})</h3>
+    <table class="data-table">
+        <thead>
+            <tr><th>Estrutura</th><th>Sistema</th><th>Status</th><th>Primeira Vez Visto</th><th>Ações</th></tr>
+        </thead>
+        <tbody>
+            {% for entry in (resolved + discovered) %}
+            {% set s = entry.structure %}
+            <tr>
+                <td>{{ s.name or s.structure_id }}</td>
+                <td class="muted">{{ s.system_name or "?" }}</td>
+                <td><span class="status-badge status-{{ s.status }}">{{ s.status }}</span></td>
+                <td class="muted mono">{{ s.first_seen_at.strftime("%Y-%m-%d") }}</td>
+                <td>
+                    <button class="btn btn-small btn-outline"
+                            hx-post="/discovery/structure/{{ s.structure_id }}/validate"
+                            hx-target="#val-status-{{ s.structure_id }}"
+                            hx-swap="innerHTML">
+                        Revalidar
+                    </button>
+                    <span id="val-status-{{ s.structure_id }}" class="muted"></span>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    {% if denied %}
+    <h3>Acesso Negado ({{ denied | length }})</h3>
+    <p class="muted">Nenhum personagem autenticado tem direitos de docking nestas estruturas.</p>
+    <table class="data-table">
+        <thead>
+            <tr><th>Estrutura</th><th>Sistema</th><th>Última Verificação</th><th>Ações</th></tr>
+        </thead>
+        <tbody>
+            {% for entry in denied %}
+            {% set s = entry.structure %}
+            <tr>
+                <td>{{ s.name or s.structure_id }}</td>
+                <td class="muted">{{ s.system_name or "?" }}</td>
+                <td class="muted mono">{{ s.last_resolved_at.strftime("%Y-%m-%d") if s.last_resolved_at else "?" }}</td>
+                <td>
+                    <button class="btn btn-small btn-outline"
+                            hx-post="/discovery/structure/{{ s.structure_id }}/validate"
+                            hx-target="#denied-status-{{ s.structure_id }}"
+                            hx-swap="innerHTML">
+                        Tentar Novamente
+                    </button>
+                    <span id="denied-status-{{ s.structure_id }}" class="muted"></span>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</div>
+{% endblock %}

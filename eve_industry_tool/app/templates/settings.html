@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+
+{% block title %}Configurações &mdash; EVE Industry Tool{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Configurações</h1>
+    {% if saved %}
+    <span class="save-banner">Configurações salvas.</span>
+    {% endif %}
+</div>
+
+<form method="post" action="/settings/">
+
+    {# ── Mercado e Calculadora ───────────────────────────────────────────── #}
+    <div class="card">
+        <h2>Calculadora de Produção</h2>
+        <p class="muted">Parâmetros padrão usados em todos os cálculos de custo e lucro.</p>
+
+        <div class="form-group">
+            <label for="default_market_source">Mercado Padrão</label>
+            <select id="default_market_source" name="default_market_source" class="input-field">
+                {% for group in market_options.groups %}
+                <optgroup label="{{ group.label }}">
+                    {% for opt in group.markets %}
+                    <option value="{{ opt.value }}"
+                        {% if opt.value == settings.default_market_source %}selected{% endif %}>
+                        {{ opt.label }}
+                    </option>
+                    {% endfor %}
+                </optgroup>
+                {% endfor %}
+
+                {% if market_options.private %}
+                <optgroup label="Estruturas Privadas (SOV / Citadels)">
+                    {% for opt in market_options.private %}
+                    <option value="{{ opt.value }}"
+                        {% if opt.value == settings.default_market_source %}selected{% endif %}>
+                        {{ opt.label }}
+                    </option>
+                    {% endfor %}
+                </optgroup>
+                {% endif %}
+            </select>
+            {% if market_options.private_hint %}
+            <span class="field-hint">{{ market_options.private_hint }}</span>
+            {% endif %}
+        </div>
+
+        <div class="form-group">
+            <label>Tipo de Ordem Padrão</label>
+            <div class="radio-group">
+                <label class="radio-label">
+                    <input type="radio" name="default_price_source" value="sell"
+                        {% if settings.default_price_source == "sell" %}checked{% endif %} />
+                    Sell Orders (mais barato)
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="default_price_source" value="buy"
+                        {% if settings.default_price_source == "buy" %}checked{% endif %} />
+                    Buy Orders (maior oferta)
+                </label>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="default_me_level">Material Efficiency (ME)</label>
+                <input type="number" id="default_me_level" name="default_me_level"
+                       value="{{ settings.default_me_level }}" min="0" max="10" class="input-field" />
+                <span class="field-hint">0 – 10</span>
+            </div>
+            <div class="form-group">
+                <label for="default_system_cost_index">System Cost Index</label>
+                <input type="number" id="default_system_cost_index" name="default_system_cost_index"
+                       value="{{ settings.default_system_cost_index }}"
+                       step="0.001" min="0" max="1" class="input-field" />
+                <span class="field-hint">ex: 0.05 = 5%</span>
+            </div>
+            <div class="form-group">
+                <label for="default_facility_tax">Facility Tax</label>
+                <input type="number" id="default_facility_tax" name="default_facility_tax"
+                       value="{{ settings.default_facility_tax }}"
+                       step="0.001" min="0" max="1" class="input-field" />
+                <span class="field-hint">ex: 0.10 = 10%</span>
+            </div>
+        </div>
+    </div>
+
+    {# ── Taxas de Trade ──────────────────────────────────────────────────── #}
+    <div class="card">
+        <h2>Taxas de Trade</h2>
+        {% if trading_fees and trading_fees.from_skills %}
+        <div class="skills-banner">
+            <span class="skills-icon">&#9889;</span>
+            Skills de <strong>{{ character_name }}</strong> detectadas &mdash;
+            Accounting {{ trading_fees.accounting_level }} &nbsp;&#183;&nbsp;
+            Broker Relations {{ trading_fees.broker_relations_level }}.
+            Os valores abaixo são usados quando não há personagem logado.
+        </div>
+        {% else %}
+        <p class="muted">
+            Faça login para calcular automaticamente a partir das suas skills.
+            Os valores abaixo são usados como fallback.
+        </p>
+        {% endif %}
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="default_broker_fee_pct">Broker Fee</label>
+                <input type="number" id="default_broker_fee_pct" name="default_broker_fee_pct"
+                       value="{{ settings.default_broker_fee_pct }}"
+                       step="0.0001" min="0" max="1" class="input-field" />
+                <span class="field-hint">
+                    {% if trading_fees and trading_fees.from_skills %}
+                        Skills: {{ "%.2f"|format(trading_fees.broker_fee_pct * 100) }}%
+                    {% else %}
+                        ex: 0.03 = 3%
+                    {% endif %}
+                </span>
+            </div>
+            <div class="form-group">
+                <label for="default_sales_tax_pct">Sales Tax</label>
+                <input type="number" id="default_sales_tax_pct" name="default_sales_tax_pct"
+                       value="{{ settings.default_sales_tax_pct }}"
+                       step="0.0001" min="0" max="1" class="input-field" />
+                <span class="field-hint">
+                    {% if trading_fees and trading_fees.from_skills %}
+                        Skills: {{ "%.2f"|format(trading_fees.sales_tax_pct * 100) }}%
+                    {% else %}
+                        ex: 0.08 = 8%
+                    {% endif %}
+                </span>
+            </div>
+            <div class="form-group">
+                <label for="default_scc_surcharge">SCC Surcharge</label>
+                <input type="number" id="default_scc_surcharge" name="default_scc_surcharge"
+                       value="{{ settings.default_scc_surcharge }}"
+                       step="0.001" min="0" max="1" class="input-field" />
+                <span class="field-hint">Fixo CCP: 1.5%</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="settings-save-row">
+        <button type="submit" class="btn btn-primary">Salvar Configurações</button>
+    </div>
+
+</form>
+
+{# ── Gerenciamento de Mercado ────────────────────────────────────────────── #}
+<div class="card">
+    <h2>Gerenciamento de Mercado</h2>
+
+    <div class="settings-actions">
+        <div class="settings-action-item">
+            <div>
+                <strong>Escanear Assets Pessoais</strong>
+                <p class="muted">Descobre estruturas Upwell onde você tem items e testa acesso ao mercado.</p>
+            </div>
+            {% if character_name %}
+            <button class="btn btn-outline"
+                    hx-post="/discovery/assets"
+                    hx-target="#discovery-result"
+                    hx-swap="innerHTML">
+                Escanear Agora
+            </button>
+            {% else %}
+            <span class="muted">Login necessário</span>
+            {% endif %}
+        </div>
+        <div id="discovery-result"></div>
+
+        <div class="settings-action-item">
+            <div>
+                <strong>Atualizar Mercados de Estruturas</strong>
+                <p class="muted">Re-crawla todas as estruturas com acesso de mercado e atualiza os preços.</p>
+            </div>
+            {% if character_name %}
+            <button class="btn btn-outline"
+                    hx-post="/market/structures/refresh-all"
+                    hx-target="#refresh-result"
+                    hx-swap="innerHTML">
+                Atualizar Tudo
+            </button>
+            {% else %}
+            <span class="muted">Login necessário</span>
+            {% endif %}
+        </div>
+        <div id="refresh-result"></div>
+
+        <div class="settings-action-item">
+            <div>
+                <strong>Limpar Cache de Região</strong>
+                <p class="muted">Remove preços de região em cache (The Forge). Novos cálculos buscam preços frescos.</p>
+            </div>
+            <form method="post" action="/market/clear-cache">
+                <input type="hidden" name="market_source" value="region:10000002" />
+                <button type="submit" class="btn btn-outline btn-danger-outline">Limpar Cache</button>
+            </form>
+        </div>
+        <div id="clear-result"></div>
+    </div>
+
+    <p class="muted" style="margin-top:1rem">
+        Ver estruturas descobertas e status de crawl: <a href="/market/" class="link">Visão Geral do Mercado</a>
+    </p>
+</div>
+
+{% endblock %}

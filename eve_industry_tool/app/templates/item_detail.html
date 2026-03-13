@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+
+{% block title %}{{ item.type_name }} &mdash; EVE Industry Tool{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="breadcrumb">
+        <a href="/items" class="breadcrumb-link">Itens</a>
+        <span class="breadcrumb-sep">/</span>
+        <span>{{ item.type_name }}</span>
+    </div>
+    <h1>{{ item.type_name }}</h1>
+    <div class="item-meta">
+        <span class="badge">Type ID: {{ item.type_id }}</span>
+        {% if item.category_id %}
+            <span class="badge">Categoria: {{ item.category_id }}</span>
+        {% endif %}
+        {% if item.group_id %}
+            <span class="badge">Grupo: {{ item.group_id }}</span>
+        {% endif %}
+        {% if item.volume %}
+            <span class="badge mono">{{ "%.4f"|format(item.volume) }} m³</span>
+        {% endif %}
+    </div>
+</div>
+
+<div class="detail-grid">
+    <!-- Blueprint & Materials -->
+    <div class="card">
+        <h2>Blueprint &amp; Materiais</h2>
+        {% if blueprint %}
+            <div class="blueprint-info">
+                <p>
+                    <strong>Type ID do Blueprint:</strong>
+                    <span class="mono">{{ blueprint.blueprint_type_id }}</span>
+                </p>
+                <p>
+                    <strong>Quantidade Produzida:</strong>
+                    <span class="mono">{{ blueprint.product_quantity }}</span>
+                </p>
+                <p>
+                    <strong>Tempo de Fabricação:</strong>
+                    <span class="mono">
+                        {% set h = blueprint.time_seconds // 3600 %}
+                        {% set m = (blueprint.time_seconds % 3600) // 60 %}
+                        {% set s = blueprint.time_seconds % 60 %}
+                        {% if h %}{{ h }}h {% endif %}
+                        {% if m %}{{ m }}m {% endif %}
+                        {{ s }}s
+                    </span>
+                </p>
+            </div>
+
+            {% if materials %}
+            <h3>Materiais (ME 0)</h3>
+            <table class="data-table materials-table">
+                <thead>
+                    <tr>
+                        <th>Material</th>
+                        <th>Quantidade</th>
+                        <th>Type ID</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for mat in materials %}
+                    <tr>
+                        <td>
+                            <a href="/items/{{ mat.type_id }}" class="item-link">{{ mat.name }}</a>
+                        </td>
+                        <td class="mono">{{ "{:,}".format(mat.quantity) }}</td>
+                        <td class="mono muted">{{ mat.type_id }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="muted">Nenhum dado de materiais disponível para este blueprint.</p>
+            {% endif %}
+        {% else %}
+            <p class="muted">Nenhum dado de blueprint disponível para este item.</p>
+        {% endif %}
+    </div>
+
+    <!-- Cost Calculation Form -->
+    <div class="card">
+        <h2>Calculadora de Custo &amp; Lucro</h2>
+
+        {% if blueprint %}
+
+        {# Settings summary badge #}
+        <div class="calc-settings-summary">
+            <span class="calc-settings-label">Usando:</span>
+            <span class="calc-settings-badge">{{ user_settings.default_market_source }}</span>
+            <span class="calc-settings-badge">ME {{ user_settings.default_me_level }}</span>
+            <span class="calc-settings-badge">SCI {{ "%.1f"|format(user_settings.default_system_cost_index * 100) }}%</span>
+            <span class="calc-settings-badge">Tax {{ "%.1f"|format(user_settings.default_sales_tax_pct * 100) }}%</span>
+            <a href="/settings/" class="calc-settings-edit">Alterar</a>
+        </div>
+
+        {% if trading_fees and trading_fees.from_skills %}
+        <div class="skills-banner">
+            <span class="skills-icon">&#9889;</span>
+            Taxas das skills de <strong>{{ character_name }}</strong>:
+            Accounting <span class="skill-level">{{ trading_fees.accounting_level }}</span>
+            &nbsp;·&nbsp;
+            Broker Relations <span class="skill-level">{{ trading_fees.broker_relations_level }}</span>
+        </div>
+        {% endif %}
+
+        <form
+            id="calc-form"
+            hx-post="/industry/calculate"
+            hx-target="#calc-result"
+            hx-swap="innerHTML"
+            hx-indicator="#calc-loading"
+        >
+            <input type="hidden" name="type_id"               value="{{ item.type_id }}" />
+            <input type="hidden" name="market_source"         value="{{ user_settings.default_market_source }}" />
+            <input type="hidden" name="me_level"              value="{{ user_settings.default_me_level }}" />
+            <input type="hidden" name="system_cost_index"     value="{{ user_settings.default_system_cost_index }}" />
+            <input type="hidden" name="facility_tax"          value="{{ user_settings.default_facility_tax }}" />
+            <input type="hidden" name="scc_surcharge"         value="{{ user_settings.default_scc_surcharge }}" />
+            <input type="hidden" name="broker_fee_pct"        value="{{ user_settings.default_broker_fee_pct }}" />
+            <input type="hidden" name="sales_tax_pct"         value="{{ user_settings.default_sales_tax_pct }}" />
+            <input type="hidden" name="price_source"          value="{{ user_settings.default_price_source }}" />
+
+            <div class="form-group">
+                <label for="quantity">Número de Runs</label>
+                <input type="number" id="quantity" name="quantity" value="1" min="1" class="input-field" />
+            </div>
+
+            <div class="form-row form-row-actions">
+                <button type="submit" class="btn btn-primary btn-full">
+                    Calcular
+                </button>
+            </div>
+        </form>
+
+        <div id="calc-loading" class="htmx-indicator loading-indicator">
+            Buscando preços de mercado e calculando...
+        </div>
+
+        <div id="calc-result" class="calc-result-container">
+            <!-- Resultado injetado aqui pelo HTMX -->
+        </div>
+
+        {% else %}
+        <p class="muted">Nenhum blueprint disponível — não é possível calcular o custo de produção.</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Add to production queue -->
+{% if blueprint %}
+<div class="card queue-card">
+    <h2>Adicionar à Fila de Produção</h2>
+    <form action="/queue/add" method="post" class="queue-form">
+        <input type="hidden" name="type_id" value="{{ item.type_id }}" />
+        <div class="form-row form-row-inline">
+            <div class="form-group">
+                <label for="queue-quantity">Quantidade (runs)</label>
+                <input type="number" id="queue-quantity" name="quantity" value="1" min="1" class="input-field" />
+            </div>
+            <button type="submit" class="btn btn-outline">Adicionar à Fila</button>
+        </div>
+    </form>
+</div>
+{% endif %}
+{% endblock %}
