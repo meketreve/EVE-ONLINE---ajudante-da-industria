@@ -30,7 +30,9 @@
       "Bash(cd \"D:\\\\git-projeto\\\\EVE ONLINE - ajudante da industria\\\\eve_industry_tool\" && python -c \"from app.api.settings import router; print\\('OK'\\)\")",
       "Bash(cd \"D:\\\\git-projeto\\\\EVE ONLINE - ajudante da industria\\\\eve_industry_tool\" && python -c \"from app.api.items import router; print\\('OK'\\)\")",
       "Bash(cd \"D:/git-projeto/EVE ONLINE - ajudante da industria/eve_industry_tool\" && python -c \"\nfrom app.api.settings import router\nfrom app.api.items import item_detail\nfrom app.models.user_settings import UserSettings\nprint\\('OK'\\)\n\" 2>&1)",
-      "Bash(cd \"D:/git-projeto/EVE ONLINE - ajudante da industria/eve_industry_tool\" && python -c \"from app.main import app; print\\('OK'\\)\" 2>&1)"
+      "Bash(cd \"D:/git-projeto/EVE ONLINE - ajudante da industria/eve_industry_tool\" && python -c \"from app.main import app; print\\('OK'\\)\" 2>&1)",
+      "Bash(cd:*)",
+      "Bash(python:*)"
     ]
   }
 }
