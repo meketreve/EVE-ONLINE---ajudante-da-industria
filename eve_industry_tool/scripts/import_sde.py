@@ -36,6 +36,8 @@ FUZZWORK_CACHE = Path("fuzzwork_cache.sqlite")
 
 DB_PATH = Path("database.db")
 ACTIVITY_MANUFACTURING = 1
+ACTIVITY_REACTION      = 11
+PORTION_SIZE_DEFAULT   = 1
 
 
 # ---------------------------------------------------------------------------
@@ -87,16 +89,14 @@ def download_everef(force: bool = False) -> bool:
 
 
 def import_from_everef(db: sqlite3.Connection) -> None:
-    """Lê o tar.xz do EVERef e popula items + blueprints."""
+    """Lê o tar.xz do EVERef e popula items + blueprints + reprocessamento."""
     print(f"\n[→] Lendo {EVEREF_CACHE} ...")
 
     with tarfile.open(EVEREF_CACHE, "r:xz") as tar:
         names = tar.getnames()
 
-        # Localiza arquivos JSON dentro do tar
         types_file      = _find_in_tar(names, "types.json")
         blueprints_file = _find_in_tar(names, "blueprints.json")
-        groups_file     = _find_in_tar(names, "groups.json")
 
         if not types_file or not blueprints_file:
             raise RuntimeError(
@@ -110,8 +110,21 @@ def import_from_everef(db: sqlite3.Connection) -> None:
         print(f"    Lendo blueprints...")
         blueprints_data: dict = json.loads(tar.extractfile(tar.getmember(blueprints_file)).read())
 
+        # Reprocessamento — tenta nomes alternativos
+        reproc_data: dict | None = None
+        for candidate in ("type_materials.json", "invTypeMaterials.json", "typeMaterials.json"):
+            f = _find_in_tar(names, candidate)
+            if f:
+                print(f"    Lendo {candidate}...")
+                reproc_data = json.loads(tar.extractfile(tar.getmember(f)).read())
+                break
+
     _insert_items_everef(db, types_data, {}, blueprints_data)
     _insert_blueprints_everef(db, blueprints_data)
+    if reproc_data is not None:
+        _insert_reprocessing_everef(db, reproc_data)
+    else:
+        print("[!] Dados de reprocessamento não encontrados no EVERef — use Fuzzwork para importar.")
 
 
 def _find_in_tar(names: list[str], filename: str) -> str | None:
@@ -129,18 +142,19 @@ def _insert_items_everef(
 ) -> None:
     print("\n[→] Importando itens (EVERef)...")
 
-    # type_ids que são produto de algum blueprint de manufatura
+    # type_ids que são produto de algum blueprint de manufatura OU reação
     # EVERef: products é um dict {"type_id_str": {"type_id": N, "quantity": N}}
     manufacturable: set[int] = set()
     for bp in blueprints_data.values():
-        mfg = bp.get("activities", {}).get("manufacturing", {})
-        products = mfg.get("products", {})
-        if isinstance(products, dict):
-            for prod in products.values():
-                manufacturable.add(int(prod["type_id"]))
-        else:
-            for prod in products:
-                manufacturable.add(int(prod.get("type_id") or prod.get("typeID")))
+        for activity_key in ("manufacturing", "reaction"):
+            act = bp.get("activities", {}).get(activity_key, {})
+            products = act.get("products", {})
+            if isinstance(products, dict):
+                for prod in products.values():
+                    manufacturable.add(int(prod["type_id"]))
+            else:
+                for prod in products:
+                    manufacturable.add(int(prod.get("type_id") or prod.get("typeID")))
 
     rows = []
     for tid, t in types_data.items():
@@ -159,18 +173,19 @@ def _insert_items_everef(
             category_id,
             t.get("volume"),
             1 if type_id in manufacturable else 0,
+            int(t.get("portion_size") or PORTION_SIZE_DEFAULT),
         ))
 
     db.execute("DELETE FROM items")
     db.executemany(
-        "INSERT INTO items (type_id, type_name, group_id, category_id, volume, is_manufacturable) VALUES (?,?,?,?,?,?)",
+        "INSERT INTO items (type_id, type_name, group_id, category_id, volume, is_manufacturable, portion_size) VALUES (?,?,?,?,?,?,?)",
         rows,
     )
     print(f"    {len(rows):,} itens  |  {len(manufacturable):,} fabricáveis")
 
 
 def _insert_blueprints_everef(db: sqlite3.Connection, blueprints_data: dict) -> None:
-    print("[→] Importando blueprints (EVERef)...")
+    print("[→] Importando blueprints (EVERef) — manufatura + reação...")
 
     db.execute("DELETE FROM blueprint_materials")
     db.execute("DELETE FROM blueprints")
@@ -180,21 +195,24 @@ def _insert_blueprints_everef(db: sqlite3.Connection, blueprints_data: dict) -> 
 
     for bp_type_id_str, bp in blueprints_data.items():
         bp_type_id = int(bp_type_id_str)
-        mfg = bp.get("activities", {}).get("manufacturing", {})
-        if not mfg:
+
+        # Tenta manufatura primeiro, depois reação
+        act = bp.get("activities", {})
+        activity = act.get("manufacturing") or act.get("reaction")
+        if not activity:
             continue
 
         # EVERef: products e materials são dicts keyed by str type_id
-        products = mfg.get("products", {})
+        products = activity.get("products", {})
         if not products:
             continue
 
         product = next(iter(products.values())) if isinstance(products, dict) else products[0]
         product_type_id = int(product.get("type_id") or product.get("typeID"))
         product_qty = int(product.get("quantity", 1))
-        time_seconds = int(mfg.get("time", 0))
+        time_seconds = int(activity.get("time", 0))
 
-        raw_mats = mfg.get("materials", {})
+        raw_mats = activity.get("materials", {})
         mat_iter = raw_mats.values() if isinstance(raw_mats, dict) else raw_mats
         materials = [
             {"type_id": int(m.get("type_id") or m.get("typeID")), "quantity": int(m["quantity"])}
@@ -215,9 +233,14 @@ def _insert_blueprints_everef(db: sqlite3.Connection, blueprints_data: dict) -> 
         internal_id = bp_id_map.get(bp_type_id)
         if internal_id is None:
             continue
-        mfg = bp.get("activities", {}).get("manufacturing", {})
-        for m in mfg.get("materials", []):
-            mat_rows.append((internal_id, int(m["typeID"]), int(m["quantity"])))
+        act = bp.get("activities", {})
+        activity = act.get("manufacturing") or act.get("reaction")
+        if not activity:
+            continue
+        raw_mats = activity.get("materials", {})
+        mat_iter = raw_mats.values() if isinstance(raw_mats, dict) else raw_mats
+        for m in mat_iter:
+            mat_rows.append((internal_id, int(m.get("type_id") or m.get("typeID")), int(m["quantity"])))
 
     db.executemany(
         "INSERT INTO blueprint_materials (blueprint_id, material_type_id, quantity) VALUES (?,?,?)",
@@ -256,15 +279,65 @@ def import_from_fuzzwork(db: sqlite3.Connection) -> None:
 
     _insert_items_fuzzwork(sde, db)
     _insert_blueprints_fuzzwork(sde, db)
+    _insert_reprocessing_fuzzwork(sde, db)
 
     sde.close()
+
+
+def _insert_reprocessing_fuzzwork(sde: sqlite3.Connection, db: sqlite3.Connection) -> None:
+    print("[→] Importando materiais de reprocessamento (Fuzzwork)...")
+    rows = sde.execute(
+        "SELECT typeID, materialTypeID, quantity FROM invTypeMaterials"
+    ).fetchall()
+
+    db.execute("DELETE FROM reprocessing_materials")
+    db.executemany(
+        "INSERT OR IGNORE INTO reprocessing_materials (type_id, material_type_id, quantity) VALUES (?,?,?)",
+        [(r["typeID"], r["materialTypeID"], r["quantity"]) for r in rows],
+    )
+    print(f"    {len(rows):,} entradas de reprocessamento")
+
+
+def _insert_reprocessing_everef(db: sqlite3.Connection, reproc_data: dict) -> None:
+    """
+    Importa dados de reprocessamento do EVERef.
+    Aceita dois formatos:
+      - dict: {type_id_str: [{material_type_id, quantity}, ...]}
+      - list:  [{type_id, material_type_id, quantity}, ...]
+    """
+    print("[→] Importando materiais de reprocessamento (EVERef)...")
+    rows = []
+
+    if isinstance(reproc_data, list):
+        for entry in reproc_data:
+            tid = entry.get("type_id") or entry.get("typeID")
+            mat = entry.get("material_type_id") or entry.get("materialTypeID")
+            qty = entry.get("quantity")
+            if tid and mat and qty:
+                rows.append((int(tid), int(mat), int(qty)))
+    elif isinstance(reproc_data, dict):
+        for tid_str, mats in reproc_data.items():
+            if isinstance(mats, list):
+                for m in mats:
+                    mat = m.get("material_type_id") or m.get("materialTypeID")
+                    qty = m.get("quantity")
+                    if mat and qty:
+                        rows.append((int(tid_str), int(mat), int(qty)))
+
+    db.execute("DELETE FROM reprocessing_materials")
+    db.executemany(
+        "INSERT OR IGNORE INTO reprocessing_materials (type_id, material_type_id, quantity) VALUES (?,?,?)",
+        rows,
+    )
+    print(f"    {len(rows):,} entradas de reprocessamento")
 
 
 def _insert_items_fuzzwork(sde: sqlite3.Connection, db: sqlite3.Connection) -> None:
     print("\n[→] Importando itens (Fuzzwork)...")
 
     rows = sde.execute("""
-        SELECT t.typeID, t.typeName, t.groupID, g.categoryID, t.volume
+        SELECT t.typeID, t.typeName, t.groupID, g.categoryID, t.volume,
+               COALESCE(t.portionSize, 1) AS portionSize
         FROM invTypes t
         JOIN invGroups g ON t.groupID = g.groupID
         WHERE t.published = 1
@@ -272,35 +345,35 @@ def _insert_items_fuzzwork(sde: sqlite3.Connection, db: sqlite3.Connection) -> N
 
     manufacturable: set[int] = {
         r[0] for r in sde.execute(
-            "SELECT productTypeID FROM industryActivityProducts WHERE activityID = ?",
-            (ACTIVITY_MANUFACTURING,)
+            "SELECT productTypeID FROM industryActivityProducts WHERE activityID IN (?, ?)",
+            (ACTIVITY_MANUFACTURING, ACTIVITY_REACTION)
         )
     }
 
     db.execute("DELETE FROM items")
     db.executemany(
-        "INSERT INTO items (type_id, type_name, group_id, category_id, volume, is_manufacturable) VALUES (?,?,?,?,?,?)",
+        "INSERT INTO items (type_id, type_name, group_id, category_id, volume, is_manufacturable, portion_size) VALUES (?,?,?,?,?,?,?)",
         [(r["typeID"], r["typeName"], r["groupID"], r["categoryID"], r["volume"],
-          1 if r["typeID"] in manufacturable else 0) for r in rows],
+          1 if r["typeID"] in manufacturable else 0, r["portionSize"]) for r in rows],
     )
     print(f"    {len(rows):,} itens  |  {len(manufacturable):,} fabricáveis")
 
 
 def _insert_blueprints_fuzzwork(sde: sqlite3.Connection, db: sqlite3.Connection) -> None:
-    print("[→] Importando blueprints (Fuzzwork)...")
+    print("[→] Importando blueprints (Fuzzwork) — manufatura + reação...")
 
     products = sde.execute("""
-        SELECT p.typeID AS bp_id, p.productTypeID, p.quantity,
+        SELECT p.typeID AS bp_id, p.productTypeID, p.quantity, p.activityID,
                COALESCE(t.time, 0) AS time_seconds
         FROM industryActivityProducts p
-        LEFT JOIN industryActivity t ON t.typeID = p.typeID AND t.activityID = ?
-        WHERE p.activityID = ?
-    """, (ACTIVITY_MANUFACTURING, ACTIVITY_MANUFACTURING)).fetchall()
+        LEFT JOIN industryActivity t ON t.typeID = p.typeID AND t.activityID = p.activityID
+        WHERE p.activityID IN (?, ?)
+    """, (ACTIVITY_MANUFACTURING, ACTIVITY_REACTION)).fetchall()
 
     mat_rows_raw = sde.execute("""
         SELECT typeID, materialTypeID, quantity
-        FROM industryActivityMaterials WHERE activityID = ?
-    """, (ACTIVITY_MANUFACTURING,)).fetchall()
+        FROM industryActivityMaterials WHERE activityID IN (?, ?)
+    """, (ACTIVITY_MANUFACTURING, ACTIVITY_REACTION)).fetchall()
 
     from collections import defaultdict
     mat_map: dict[int, list] = defaultdict(list)
@@ -345,6 +418,25 @@ def run(force: bool, skip_download: bool, source: str | None) -> None:
     db = sqlite3.connect(DB_PATH)
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA synchronous=NORMAL")
+
+    # Migrations: garante colunas e tabelas novas antes de importar.
+    _schema_migrations = [
+        "ALTER TABLE items ADD COLUMN portion_size INTEGER DEFAULT 1",
+        """CREATE TABLE IF NOT EXISTS reprocessing_materials (
+            id INTEGER PRIMARY KEY,
+            type_id INTEGER NOT NULL,
+            material_type_id INTEGER NOT NULL,
+            quantity INTEGER NOT NULL,
+            UNIQUE(type_id, material_type_id)
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_reproc_type_id ON reprocessing_materials (type_id)",
+    ]
+    for sql in _schema_migrations:
+        try:
+            db.execute(sql)
+        except sqlite3.OperationalError:
+            pass  # coluna/tabela já existe
+    db.commit()
 
     try:
         # --- Tenta EVERef (padrão, a menos que --source fuzzwork) ---

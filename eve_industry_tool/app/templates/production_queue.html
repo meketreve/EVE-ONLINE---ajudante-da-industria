@@ -17,6 +17,16 @@
 {% if character_name %}
     {% if queue_items %}
     <div class="card">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.75rem">
+            <h2 style="margin:0">Itens na Fila</h2>
+            <button class="btn btn-outline"
+                    hx-get="/queue/bom"
+                    hx-target="#queue-bom-result"
+                    hx-swap="innerHTML"
+                    hx-indicator="#queue-bom-loading">
+                &#9881; Ver Lista de Compras
+            </button>
+        </div>
         <table class="data-table">
             <thead>
                 <tr>
@@ -60,6 +70,14 @@
             </tbody>
         </table>
     </div>
+
+    <div class="card" id="queue-bom-card" style="margin-top:1rem">
+        <h2>Lista de Compras Agregada</h2>
+        <p class="muted small">Materiais base necessários para produzir todos os itens pendentes na fila (BOM recursivo).</p>
+        <span id="queue-bom-loading" class="htmx-indicator loading-indicator">Calculando...</span>
+        <div id="queue-bom-result"></div>
+    </div>
+
     {% else %}
     <div class="card empty-state">
         <p>Sua fila de produção está vazia.</p>

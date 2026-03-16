@@ -134,6 +134,15 @@ class ESIClient:
         url = f"{settings.ESI_BASE_URL}/characters/{character_id}/assets/"
         return await self._get_paginated(url, token=token)
 
+    async def get_market_history(self, region_id: int, type_id: int) -> list:
+        """
+        GET /markets/{region_id}/history/?type_id={type_id}
+        Retorna histórico diário de mercado (volume, preço médio, etc.).
+        Endpoint público, sem autenticação.
+        """
+        url = f"{settings.ESI_BASE_URL}/markets/{region_id}/history/"
+        return await self._get(url, params={"type_id": type_id})
+
     async def get_structure_market(self, structure_id: int, token: str) -> list:
         """Market orders in a player-owned structure (requires auth, paginated)."""
         url = f"{settings.ESI_BASE_URL}/markets/structures/{structure_id}/"

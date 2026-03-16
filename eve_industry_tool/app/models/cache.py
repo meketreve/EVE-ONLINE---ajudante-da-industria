@@ -32,6 +32,8 @@ class MarketPriceCache(Base):
     order_type: Mapped[str] = mapped_column(String(8), nullable=False)
     # None significa "sem ordens disponíveis naquele momento"
     price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Volume total de unidades disponíveis (soma de volume_remain de todas as ordens)
+    total_volume: Mapped[int | None] = mapped_column(Integer, nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 

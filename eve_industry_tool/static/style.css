@@ -234,10 +234,12 @@ ul {
 }
 
 .form-row-actions {
+    display: flex;
     gap: 0.5rem;
     align-items: stretch;
 }
 .form-row-actions .btn-primary { flex: 1; }
+.form-row-actions .btn-outline { white-space: nowrap; }
 .btn-refresh {
     white-space: nowrap;
     font-size: 0.85rem;
@@ -800,9 +802,18 @@ select.input-field {
 .calc-result h3 {
     font-size: 1rem;
     color: var(--color-primary);
-    margin-bottom: 1rem;
+    margin-bottom: 0.5rem;
     padding-bottom: 0.4rem;
     border-bottom: 1px solid var(--border-color);
+}
+
+.prices-age-bar {
+    font-size: 0.78rem;
+    color: var(--color-muted);
+    margin-bottom: 1rem;
+}
+.prices-age-label strong {
+    color: var(--text-secondary);
 }
 
 .calc-result h4 {
@@ -1060,3 +1071,219 @@ select.input-field {
 .calc-settings-edit:hover {
     text-decoration: underline;
 }
+
+/* ============================================================
+   Reprocessing Calculator
+   ============================================================ */
+
+.reproc-form-grid {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 1.5rem;
+    align-items: start;
+}
+
+.reproc-textarea {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    resize: vertical;
+    width: 100%;
+}
+
+.reproc-form-options {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.reproc-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+}
+.reproc-actions .btn-primary { flex: 1; }
+
+.reproc-results-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+}
+
+.reproc-col {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.reproc-col-header {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+}
+.reproc-col-header h3 {
+    font-size: 1rem;
+    margin-bottom: 0.15rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.reproc-header-green { border-top: 3px solid var(--color-success); }
+.reproc-header-blue  { border-top: 3px solid var(--color-primary); }
+
+.badge-count {
+    background: var(--bg-table-header);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    font-size: 0.75rem;
+    padding: 0.1rem 0.5rem;
+    font-weight: normal;
+}
+
+.reproc-search-box {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+}
+.reproc-search-label {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--color-muted);
+    margin-bottom: 0.3rem;
+}
+.reproc-search-string {
+    width: 100%;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    background: var(--bg-input);
+    color: var(--color-accent);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 0.4rem 0.6rem;
+    resize: none;
+    cursor: text;
+}
+
+.reproc-table { margin: 0; }
+.reproc-table td, .reproc-table th { padding: 0.4rem 0.75rem; }
+.reproc-table .item-name { font-size: 0.85rem; }
+
+.reproc-warnings {
+    margin-top: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+@media (max-width: 900px) {
+    .reproc-form-grid     { grid-template-columns: 1fr; }
+    .reproc-results-grid  { grid-template-columns: 1fr; }
+}
+
+.row-no-reproc td { opacity: 0.65; }
+.badge-no-reproc {
+    font-size: 0.68rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    background: rgba(106, 106, 138, 0.2);
+    color: var(--color-muted);
+    border: 1px solid var(--border-color);
+    margin-left: 0.4rem;
+    vertical-align: middle;
+}
+
+/* ============================================================
+   BOM Recursivo
+   ============================================================ */
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+.checkbox-label input[type="checkbox"] { width: 1rem; height: 1rem; cursor: pointer; }
+
+.bom-tree-details { margin-bottom: 1rem; }
+.bom-tree-summary {
+    cursor: pointer;
+    user-select: none;
+    padding: 0.4rem 0;
+    list-style: none;
+}
+.bom-tree-summary::-webkit-details-marker { display: none; }
+.bom-tree-summary h4 { color: var(--text-secondary); font-size: 0.82rem; }
+
+.bom-tree-table td, .bom-tree-table th { padding: 0.3rem 0.6rem; font-size: 0.82rem; }
+
+.bom-manufactured td:first-child { color: var(--color-primary); }
+.bom-leaf td:first-child         { color: var(--text-primary); }
+.bom-buy-as-is td:first-child    { color: var(--color-success); }
+
+.bom-connector { color: var(--color-muted); margin-right: 2px; }
+.bom-action-cell { width: 1%; white-space: nowrap; padding-left: 0.5rem !important; }
+
+.me-inline-input {
+    width: 3.2rem;
+    padding: 0.1rem 0.3rem;
+    font-size: 0.78rem;
+    font-family: var(--font-mono);
+    text-align: center;
+    background: var(--bg-input, rgba(255,255,255,0.06));
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+}
+
+.badge-fab {
+    font-size: 0.65rem;
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    background: rgba(74, 158, 255, 0.15);
+    color: var(--color-primary);
+    border: 1px solid rgba(74, 158, 255, 0.3);
+    margin-right: 4px;
+    vertical-align: middle;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+}
+
+.badge-buy {
+    font-size: 0.65rem;
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    background: rgba(76, 175, 80, 0.15);
+    color: var(--color-success);
+    border: 1px solid rgba(76, 175, 80, 0.3);
+    margin-right: 4px;
+    vertical-align: middle;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+}
+
+.btn-bom-toggle {
+    font-size: 0.72rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid;
+    background: transparent;
+    transition: background 0.15s;
+}
+.btn-bom-buy {
+    color: var(--color-success);
+    border-color: rgba(76, 175, 80, 0.4);
+}
+.btn-bom-buy:hover { background: rgba(76, 175, 80, 0.12); }
+.btn-bom-fab {
+    color: var(--color-primary);
+    border-color: rgba(74, 158, 255, 0.4);
+}
+.btn-bom-fab:hover { background: rgba(74, 158, 255, 0.12); }
+
+/* Profundidades alternadas */
+.bom-row-depth-1 { background: rgba(255,255,255,0.015); }
+.bom-row-depth-2 { background: rgba(255,255,255,0.025); }
+.bom-row-depth-3 { background: rgba(255,255,255,0.035); }
+.bom-row-depth-4, .bom-row-depth-5 { background: rgba(255,255,255,0.045); }

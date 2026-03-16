@@ -85,6 +85,23 @@
                 <span class="field-hint">ex: 0.10 = 10%</span>
             </div>
         </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="default_structure_me_bonus">Bônus ME da Estação (%)</label>
+                <input type="number" id="default_structure_me_bonus" name="default_structure_me_bonus"
+                       value="{{ settings.default_structure_me_bonus }}"
+                       step="0.1" min="0" max="100" class="input-field" />
+                <span class="field-hint">Redução de materiais. Ex: Azbel base 1% + rig 2% = 3</span>
+            </div>
+            <div class="form-group">
+                <label for="default_structure_te_bonus">Bônus TE da Estação (%)</label>
+                <input type="number" id="default_structure_te_bonus" name="default_structure_te_bonus"
+                       value="{{ settings.default_structure_te_bonus }}"
+                       step="0.1" min="0" max="100" class="input-field" />
+                <span class="field-hint">Redução de tempo. Usado como padrão quando nenhuma estrutura específica é selecionada.</span>
+            </div>
+        </div>
     </div>
 
     {# ── Taxas de Trade ──────────────────────────────────────────────────── #}
@@ -142,11 +159,83 @@
         </div>
     </div>
 
+    {# ── Importação ──────────────────────────────────────────────────────────── #}
+    <div class="card">
+        <h2>Importação</h2>
+        <p class="muted">Custo de frete usado no Ranking de Importação para calcular o lucro líquido por item.</p>
+        <div class="form-group">
+            <label for="default_freight_cost_per_m3">Custo de Frete (ISK/m³)</label>
+            <input type="number" id="default_freight_cost_per_m3" name="default_freight_cost_per_m3"
+                   value="{{ settings.default_freight_cost_per_m3 }}"
+                   step="0.01" min="0" class="input-field" />
+            <span class="field-hint">ex: 500 = 500 ISK por m³ transportado</span>
+        </div>
+    </div>
+
     <div class="settings-save-row">
         <button type="submit" class="btn btn-primary">Salvar Configurações</button>
     </div>
 
 </form>
+
+{# ── Estruturas de Manufatura ────────────────────────────────────────────── #}
+<div class="card">
+    <h2>Estruturas de Manufatura</h2>
+    <p class="muted">
+        Cadastre suas estruturas de produção (Raitaru, Azbel, Sotiyo) com os bônus totais de ME/TE.
+        Inclua o bônus base da estrutura <em>mais</em> todos os rigs instalados.
+        A ESI não expõe rigs de estrutura, portanto o cadastro é manual.
+    </p>
+
+    <div id="mfg-structures-container"
+         hx-get="/manufacturing-structures/"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+        <span class="muted">Carregando...</span>
+    </div>
+
+    <hr style="margin: 1rem 0; border-color: var(--border);" />
+
+    <h3>Adicionar Estrutura</h3>
+    <form hx-post="/manufacturing-structures/"
+          hx-target="#mfg-structures-container"
+          hx-swap="innerHTML"
+          hx-on::after-request="this.reset()">
+        <div class="form-row">
+            <div class="form-group" style="flex:2">
+                <label for="mfg-name">Nome</label>
+                <input type="text" id="mfg-name" name="name"
+                       placeholder="ex: Minha Azbel" class="input-field" required />
+            </div>
+            <div class="form-group" style="flex:1">
+                <label for="mfg-type">Tipo</label>
+                <select id="mfg-type" name="structure_type" class="input-field">
+                    <option value="raitaru">Raitaru (Medium EC)</option>
+                    <option value="azbel" selected>Azbel (Large EC)</option>
+                    <option value="sotiyo">Sotiyo (XL EC)</option>
+                    <option value="custom">Outra / Personalizado</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="mfg-me">Bônus ME Total (%)</label>
+                <input type="number" id="mfg-me" name="me_bonus"
+                       value="0" step="0.1" min="0" max="100" class="input-field" />
+                <span class="field-hint">Ex: Azbel base 1% + Standup ME I 2% = 3</span>
+            </div>
+            <div class="form-group">
+                <label for="mfg-te">Bônus TE Total (%)</label>
+                <input type="number" id="mfg-te" name="te_bonus"
+                       value="0" step="0.1" min="0" max="100" class="input-field" />
+                <span class="field-hint">Redução no tempo de fabricação</span>
+            </div>
+            <div class="form-group" style="justify-content:flex-end;padding-top:1.5rem">
+                <button type="submit" class="btn btn-primary">Adicionar</button>
+            </div>
+        </div>
+    </form>
+</div>
 
 {# ── Gerenciamento de Mercado ────────────────────────────────────────────── #}
 <div class="card">

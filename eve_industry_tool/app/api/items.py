@@ -139,6 +139,12 @@ async def item_detail(
         user_settings["default_broker_fee_pct"] = trading_fees["broker_fee_pct"]
         user_settings["default_sales_tax_pct"] = trading_fees["sales_tax_pct"]
 
+    from app.models.manufacturing_structure import ManufacturingStructure
+    mfg_structs_result = await db.execute(
+        select(ManufacturingStructure).order_by(ManufacturingStructure.name)
+    )
+    manufacturing_structures = mfg_structs_result.scalars().all()
+
     context = {
         "request": request,
         "item": item,
@@ -148,6 +154,7 @@ async def item_detail(
         "market_options": market_options,
         "user_settings": user_settings,
         "character_name": request.session.get("character_name"),
+        "manufacturing_structures": manufacturing_structures,
     }
 
     return templates.TemplateResponse("item_detail.html", context)

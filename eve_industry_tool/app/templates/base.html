@@ -6,6 +6,7 @@
     <title>{% block title %}EVE Industry Tool{% endblock %}</title>
     <link rel="stylesheet" href="/static/style.css" />
     <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+    {% block extra_head %}{% endblock %}
 </head>
 <body>
     <nav class="navbar">
@@ -21,6 +22,7 @@
             <li><a href="/queue" class="nav-link">Fila de Produção</a></li>
             <li><a href="/market/" class="nav-link">Mercado</a></li>
             <li><a href="/industry/ranking" class="nav-link">Ranking</a></li>
+            <li><a href="/reprocessing/" class="nav-link">Reprocessamento</a></li>
             <li><a href="/settings/" class="nav-link">Configurações</a></li>
         </ul>
         <div class="navbar-auth">

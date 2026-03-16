@@ -16,4 +16,7 @@ class UserSettings(Base):
     default_broker_fee_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.03)
     default_sales_tax_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.08)
     default_price_source: Mapped[str] = mapped_column(String(8), nullable=False, default="sell")
+    default_freight_cost_per_m3:   Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    default_structure_me_bonus:    Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    default_structure_te_bonus:    Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)

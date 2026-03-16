@@ -73,6 +73,7 @@ async def _write_price_cache(
     market_id: int,
     order_type: str,
     price: float | None,
+    total_volume: int | None = None,
 ) -> None:
     """
     Upsert atômico usando INSERT OR REPLACE do SQLite.
@@ -84,10 +85,11 @@ async def _write_price_cache(
         market_id=market_id,
         order_type=order_type,
         price=price,
+        total_volume=total_volume,
         fetched_at=datetime.utcnow(),
     ).on_conflict_do_update(
         index_elements=["type_id", "market_type", "market_id", "order_type"],
-        set_={"price": price, "fetched_at": datetime.utcnow()},
+        set_={"price": price, "total_volume": total_volume, "fetched_at": datetime.utcnow()},
     )
     await db.execute(stmt)
 
@@ -106,6 +108,63 @@ async def clear_price_cache(
     )
     await db.flush()
     return result.rowcount
+
+
+async def get_prices_cache_only(
+    type_ids: list[int],
+    market_type: str,
+    market_id: int,
+    order_type: str,
+    db: AsyncSession,
+) -> tuple[dict[int, float | None], "datetime | None"]:
+    """
+    Lê preços do cache sem checar TTL e sem chamar a ESI.
+    IDs ausentes no cache retornam None no price_map.
+    Retorna (price_map, oldest_fetched_at).
+    """
+    result = await db.execute(
+        select(MarketPriceCache).where(
+            MarketPriceCache.type_id.in_(type_ids),
+            MarketPriceCache.market_type == market_type,
+            MarketPriceCache.market_id == market_id,
+            MarketPriceCache.order_type == order_type,
+        )
+    )
+    rows = result.scalars().all()
+    price_map: dict[int, float | None] = {tid: None for tid in type_ids}
+    for row in rows:
+        price_map[row.type_id] = row.price
+    oldest = min((row.fetched_at for row in rows), default=None)
+    return price_map, oldest
+
+
+async def refresh_prices_for_types(
+    type_ids: list[int],
+    market_type: str,
+    market_id: int,
+    order_type: str,
+    db: AsyncSession,
+    token: str | None = None,
+) -> None:
+    """
+    Força atualização via ESI apenas para os type_ids fornecidos.
+    Remove entradas antigas e busca novos preços.
+    """
+    if not type_ids:
+        return
+    await db.execute(
+        delete(MarketPriceCache).where(
+            MarketPriceCache.type_id.in_(type_ids),
+            MarketPriceCache.market_type == market_type,
+            MarketPriceCache.market_id == market_id,
+            MarketPriceCache.order_type == order_type,
+        )
+    )
+    await db.flush()
+    if market_type == "structure":
+        await get_prices_for_materials_structure(type_ids, market_id, token, order_type, db=db)
+    else:
+        await get_prices_for_materials(type_ids, market_id, order_type, db=db)
 
 
 # ---------------------------------------------------------------------------
@@ -142,9 +201,10 @@ async def get_best_price(
         else max(o["price"] for o in orders) if orders
         else None
     )
+    total_volume = sum(o.get("volume_remain", 0) for o in orders) if orders else None
 
     if db is not None:
-        await _write_price_cache(db, type_id, "region", region_id, order_type, price)
+        await _write_price_cache(db, type_id, "region", region_id, order_type, price, total_volume)
 
     return price
 

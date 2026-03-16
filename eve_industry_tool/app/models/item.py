@@ -13,3 +13,4 @@ class Item(Base):
     category_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     volume: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_manufacturable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    portion_size: Mapped[int | None] = mapped_column(Integer, nullable=True, default=1)

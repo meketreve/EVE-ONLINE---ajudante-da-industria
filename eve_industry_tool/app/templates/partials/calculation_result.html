@@ -6,8 +6,24 @@
 <div class="calc-result">
     <h3>
         Resultados — {{ runs }} run(s) de {{ item.type_name }}
-        <span class="muted">(ME {{ me_level }}, preços {{ price_source }})</span>
+        <span class="muted">(ME {{ me_level }}{% if structure_me_bonus %} + estrutura -{{ "%.1f"|format(structure_me_bonus) }}% ME{% endif %}, preços {{ price_source }})</span>
     </h3>
+    {% if active_structure %}
+    <div class="skills-banner" style="margin-bottom:0.5rem">
+        <span class="skills-icon">&#127981;</span>
+        Estrutura: <strong>{{ active_structure.name }}</strong>
+        &nbsp;&#183;&nbsp; ME -{{ "%.1f"|format(active_structure.me_bonus) }}%
+        &nbsp;&#183;&nbsp; TE -{{ "%.1f"|format(active_structure.te_bonus) }}%
+    </div>
+    {% endif %}
+
+    <div class="prices-age-bar">
+        {% if prices_age_str %}
+        <span class="prices-age-label">&#128337; Preços do cache: <strong>{{ prices_age_str }}</strong></span>
+        {% else %}
+        <span class="prices-age-label muted">Sem dados de preço em cache</span>
+        {% endif %}
+    </div>
 
     {% if missing_prices > 0 and not is_structure %}
     <div class="alert alert-warning">
@@ -27,8 +43,125 @@
     </div>
     {% endif %}
 
-    <!-- Materials breakdown -->
-    <h4>Materiais</h4>
+    {% if recursive and bom_display_rows %}
+    <!-- Sincroniza me_overrides_json de volta ao form principal -->
+    <script>
+    (function() {
+        var inp = document.getElementById('me-overrides-input');
+        if (inp) inp.value = {{ me_overrides_json | tojson }};
+    })();
+    </script>
+
+    <!-- Árvore BOM Recursiva -->
+    <details class="bom-tree-details" open>
+        <summary class="bom-tree-summary">
+            <h4 style="display:inline">&#9881; Cadeia de Produção</h4>
+            <span class="muted small">&nbsp;— clique para expandir/recolher</span>
+        </summary>
+        <div class="bom-tree-container">
+            <table class="data-table bom-tree-table">
+                <thead>
+                    <tr>
+                        <th>Item</th>
+                        <th class="align-right">Qtd</th>
+                        <th class="align-right">ME</th>
+                        <th class="align-right">Preço Unit.</th>
+                        <th class="align-right">Total</th>
+                        {% if has_compare_data %}
+                        <th class="align-right">{{ compare_market_label }}</th>
+                        <th class="align-right">Δ Unit.</th>
+                        {% endif %}
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in bom_display_rows %}
+                    <tr class="bom-row-depth-{{ [row.depth, 5] | min }} {% if row.is_manufactured %}bom-manufactured{% endif %} {% if row.buy_as_is %}bom-buy-as-is{% elif row.is_leaf %}bom-leaf{% endif %}">
+                        <td>
+                            <span class="bom-indent" style="padding-left: {{ row.depth * 18 }}px">
+                                {% if row.depth > 0 %}
+                                <span class="bom-connector">&#9492;</span>
+                                {% endif %}
+                                {% if row.buy_as_is %}
+                                <span class="badge-buy">COMPRAR</span>
+                                {% elif row.is_manufactured %}
+                                <span class="badge-fab">FAB</span>
+                                {% endif %}
+                                <a href="/items/{{ row.type_id }}" class="item-link">{{ row.type_name }}</a>
+                                {% if row.blueprint_runs > 0 and not row.buy_as_is %}
+                                <span class="muted small">&nbsp;({{ row.blueprint_runs }}× run)</span>
+                                {% endif %}
+                            </span>
+                        </td>
+                        <td class="mono align-right">{{ "{:,}".format(row.quantity) }}</td>
+                        <td class="align-right">
+                            {% if row.is_manufactured and not row.buy_as_is %}
+                            <input type="number"
+                                class="me-inline-input"
+                                min="0" max="10"
+                                value="{{ row.me_level }}"
+                                title="ME para {{ row.type_name }}"
+                                onchange="bomSetMeOverride({{ row.type_id }}, this.value)"
+                            />
+                            {% else %}
+                            <span class="muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="mono align-right">
+                            {% if row.is_leaf or row.buy_as_is %}
+                                {% if row.unit_price %}{{ "{:,.2f}".format(row.unit_price) }} ISK
+                                {% else %}<span class="muted warning">N/A</span>{% endif %}
+                            {% else %}<span class="muted">—</span>{% endif %}
+                        </td>
+                        <td class="mono align-right">
+                            {% if (row.is_leaf or row.buy_as_is) and row.total_cost %}
+                                {{ "{:,.2f}".format(row.total_cost) }} ISK
+                            {% else %}<span class="muted">—</span>{% endif %}
+                        </td>
+                        {% if has_compare_data %}
+                        <td class="mono align-right">
+                            {% if (row.is_leaf or row.buy_as_is) and row.compare_price %}
+                                {{ "{:,.2f}".format(row.compare_price) }} ISK
+                            {% elif row.is_leaf or row.buy_as_is %}
+                                <span class="muted">N/A</span>
+                            {% else %}
+                                <span class="muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="mono align-right">
+                            {% if (row.is_leaf or row.buy_as_is) and row.unit_price and row.compare_price %}
+                                {% set delta = row.unit_price - row.compare_price %}
+                                {% if delta > 0 %}<span class="danger">+{{ "{:,.2f}".format(delta) }}</span>
+                                {% elif delta < 0 %}<span class="success">{{ "{:,.2f}".format(delta) }}</span>
+                                {% else %}<span class="muted">=</span>{% endif %}
+                            {% else %}<span class="muted">—</span>{% endif %}
+                        </td>
+                        {% endif %}
+                        <td class="bom-action-cell">
+                            {% if row.is_manufactured and row.depth > 0 %}
+                                {% if row.buy_as_is %}
+                                <button type="button"
+                                    class="btn-bom-toggle btn-bom-fab"
+                                    title="Fabricar este item"
+                                    onclick="bomToggleBuyAsIs({{ row.type_id }}, false)">&#9881; Fabricar</button>
+                                {% else %}
+                                <button type="button"
+                                    class="btn-bom-toggle btn-bom-buy"
+                                    title="Comprar este item pronto"
+                                    onclick="bomToggleBuyAsIs({{ row.type_id }}, true)">&#128722; Comprar</button>
+                                {% endif %}
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </details>
+    {% endif %}
+
+    <!-- Materiais base (comprar) -->
+    <h4>{% if recursive %}Materiais Base <span class="muted small">(o que comprar)</span>{% else %}Materiais{% endif %}</h4>
     <table class="data-table">
         <thead>
             <tr>
@@ -36,25 +169,69 @@
                 <th class="align-right">Quantidade</th>
                 <th class="align-right">Preço Unit.</th>
                 <th class="align-right">Total</th>
+                {% if has_compare_data %}
+                <th class="align-right">{{ compare_market_label }} Unit.</th>
+                <th class="align-right">{{ compare_market_label }} Total</th>
+                <th class="align-right">Δ Unit.</th>
+                {% endif %}
             </tr>
         </thead>
         <tbody>
             {% for mat in materials %}
+            {% set cheaper_here = mat.savings_unit is not none and mat.savings_unit > 0 %}
+            {% set cheaper_there = mat.savings_unit is not none and mat.savings_unit < 0 %}
             <tr>
                 <td>{{ mat.name }}</td>
                 <td class="mono align-right">{{ "{:,}".format(mat.quantity) }}</td>
-                <td class="mono align-right">
+                <td class="mono align-right {% if cheaper_here %}success{% elif cheaper_there %}danger{% endif %}">
                     {% if mat.unit_price %}
                         {{ "{:,.2f}".format(mat.unit_price) }} ISK
                     {% else %}
                         <span class="muted warning">N/A</span>
                     {% endif %}
                 </td>
-                <td class="mono align-right">{{ "{:,.2f}".format(mat.total_cost) }} ISK</td>
+                <td class="mono align-right {% if cheaper_here %}success{% elif cheaper_there %}danger{% endif %}">
+                    {{ "{:,.2f}".format(mat.total_cost) }} ISK
+                </td>
+                {% if has_compare_data %}
+                <td class="mono align-right {% if cheaper_there %}success{% elif cheaper_here %}danger{% endif %}">
+                    {% if mat.compare_price %}
+                        {{ "{:,.2f}".format(mat.compare_price) }} ISK
+                    {% else %}
+                        <span class="muted">N/A</span>
+                    {% endif %}
+                </td>
+                <td class="mono align-right {% if cheaper_there %}success{% elif cheaper_here %}danger{% endif %}">
+                    {% if mat.compare_price %}
+                        {{ "{:,.2f}".format(mat.compare_total) }} ISK
+                    {% else %}
+                        <span class="muted">—</span>
+                    {% endif %}
+                </td>
+                <td class="mono align-right">
+                    {% if mat.savings_unit is not none %}
+                        {% if mat.savings_unit > 0 %}
+                            <span class="success">+{{ "{:,.2f}".format(mat.savings_unit) }}</span>
+                        {% elif mat.savings_unit < 0 %}
+                            <span class="danger">{{ "{:,.2f}".format(mat.savings_unit) }}</span>
+                        {% else %}
+                            <span class="muted">=</span>
+                        {% endif %}
+                    {% else %}
+                        <span class="muted">—</span>
+                    {% endif %}
+                </td>
+                {% endif %}
             </tr>
             {% endfor %}
         </tbody>
     </table>
+    {% if has_compare_data %}
+    <p class="muted small" style="margin-top:0.25rem">
+        Δ positivo = preço local é mais caro que {{ compare_market_label }} (vale importar).
+        Verde = mais barato aqui. Vermelho = mais barato em {{ compare_market_label }}.
+    </p>
+    {% endif %}
 
     <!-- Cost breakdown -->
     <h4>Custos de Produção</h4>

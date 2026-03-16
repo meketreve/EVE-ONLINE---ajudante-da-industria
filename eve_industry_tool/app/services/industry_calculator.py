@@ -126,17 +126,25 @@ def calculate_profit(
     )
 
 
-def apply_me_level(base_quantity: int, me_level: int) -> int:
+def apply_me_level(
+    base_quantity: int,
+    me_level: int,
+    structure_me_bonus: float = 0.0,
+) -> int:
     """
-    Apply Material Efficiency (ME) level to a material quantity.
+    Apply Material Efficiency to a material quantity.
 
-    EVE Online uses: ceil(base_qty * (1 - me_level / 100))
-    ME level is capped between 0 and 10.
+    EVE Online formula (multiplicative stacking):
+        ceil(base_qty * (1 - bp_me/100) * (1 - structure_me/100))
+
+    `me_level` is the blueprint ME level (0–10, each = 1% reduction).
+    `structure_me_bonus` is the total structure ME bonus in % (e.g. 3.0 = -3%).
     """
     import math
 
     me_level = max(0, min(10, me_level))
-    reduction = me_level / 100.0
-    result = math.ceil(base_quantity * (1.0 - reduction))
-    # Never go below 1
+    structure_me_bonus = max(0.0, min(100.0, structure_me_bonus))
+    result = math.ceil(
+        base_quantity * (1.0 - me_level / 100.0) * (1.0 - structure_me_bonus / 100.0)
+    )
     return max(1, result)

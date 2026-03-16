@@ -79,6 +79,7 @@ async def lifespan(app: FastAPI):
     import app.models.structure, app.models.market_order
     import app.models.market_snapshot, app.models.job
     import app.models.user_settings
+    import app.models.manufacturing_structure
 
     await create_tables()
     logger.info("Tabelas prontas.")
@@ -139,6 +140,12 @@ app.include_router(discovery.router)
 
 from app.api import settings as settings_api
 app.include_router(settings_api.router)
+
+from app.api import reprocessing as reprocessing_api
+app.include_router(reprocessing_api.router)
+
+from app.api import manufacturing_structures as mfg_structs_api
+app.include_router(mfg_structs_api.router)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -238,6 +245,114 @@ async def add_to_queue(request: Request):
             await db.commit()
 
     return RedirectResponse(url="/queue", status_code=303)
+
+
+@app.get("/queue/bom", response_class=HTMLResponse)
+async def queue_aggregate_bom(request: Request):
+    """
+    Computa o BOM agregado de todos os itens na fila de produção.
+    Retorna um fragmento HTML (HTMX) com a lista total de materiais a comprar.
+    """
+    from sqlalchemy import select
+    from app.database.database import AsyncSessionLocal
+    from app.models.production_queue import ProductionQueue
+    from app.models.item import Item
+    from app.services.blueprint_service import get_recursive_bom, aggregate_bom_leaves
+    from app.services.market_service import get_prices_cache_only
+    from app.api.settings import load_settings
+
+    character_id = request.session.get("character_id")
+    if not character_id:
+        return templates.TemplateResponse(
+            "partials/queue_bom.html",
+            {"request": request, "error": "Login necessário."},
+        )
+
+    async with AsyncSessionLocal() as db:
+        settings = await load_settings(db)
+        me_level    = settings.get("default_me_level", 0)
+        me_bonus    = settings.get("default_structure_me_bonus", 0.0)
+        mkt_source  = settings.get("default_market_source", "region:10000002")
+        price_src   = settings.get("default_price_source", "sell")
+
+        try:
+            mkt_type, mkt_id_str = mkt_source.split(":", 1)
+            mkt_id = int(mkt_id_str)
+        except (ValueError, AttributeError):
+            mkt_type, mkt_id = "region", 10000002
+
+        result = await db.execute(
+            select(ProductionQueue).where(
+                ProductionQueue.character_id == character_id,
+                ProductionQueue.status != "completed",
+            ).order_by(ProductionQueue.created_at.desc())
+        )
+        entries = result.scalars().all()
+
+        if not entries:
+            return templates.TemplateResponse(
+                "partials/queue_bom.html",
+                {"request": request, "empty": True},
+            )
+
+        # Agrega folhas do BOM de cada item da fila
+        total_leaves: dict[int, int] = {}
+        queue_summary: list[dict] = []
+
+        for entry in entries:
+            item_res = await db.execute(select(Item).where(Item.type_id == entry.item_type_id))
+            item = item_res.scalar_one_or_none()
+            item_name = item.type_name if item else f"Type {entry.item_type_id}"
+
+            bom = await get_recursive_bom(
+                entry.item_type_id, db,
+                runs=entry.quantity,
+                me_level=me_level,
+                structure_me_bonus=me_bonus,
+            )
+            leaves = aggregate_bom_leaves(bom)
+            for tid, qty in leaves.items():
+                total_leaves[tid] = total_leaves.get(tid, 0) + qty
+
+            queue_summary.append({"name": item_name, "type_id": entry.item_type_id, "runs": entry.quantity})
+
+        # Busca preços do cache
+        mat_ids = list(total_leaves.keys())
+        price_map, _ = await get_prices_cache_only(mat_ids, mkt_type, mkt_id, price_src, db)
+
+        # Busca nomes dos materiais
+        name_res = await db.execute(
+            select(Item.type_id, Item.type_name).where(Item.type_id.in_(mat_ids))
+        )
+        name_map = {r.type_id: r.type_name for r in name_res.all()}
+
+        # Monta lista de compras
+        shopping_list = []
+        total_cost = 0.0
+        for tid, qty in sorted(total_leaves.items(), key=lambda x: name_map.get(x[0], "")):
+            price = price_map.get(tid)
+            cost  = (price or 0.0) * qty
+            total_cost += cost
+            shopping_list.append({
+                "type_id":    tid,
+                "name":       name_map.get(tid, f"Type {tid}"),
+                "quantity":   qty,
+                "unit_price": price,
+                "total_cost": cost,
+            })
+
+    return templates.TemplateResponse(
+        "partials/queue_bom.html",
+        {
+            "request":       request,
+            "shopping_list": shopping_list,
+            "queue_summary": queue_summary,
+            "total_cost":    total_cost,
+            "market_source": mkt_source,
+            "me_level":      me_level,
+            "me_bonus":      me_bonus,
+        },
+    )
 
 
 @app.delete("/queue/{entry_id}")

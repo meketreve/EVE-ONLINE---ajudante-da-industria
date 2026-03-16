@@ -26,14 +26,17 @@ templates = Jinja2Templates(directory="app/templates")
 SETTINGS_ID = 1
 
 DEFAULTS = {
-    "default_market_source":    "region:10000002",
-    "default_me_level":         0,
-    "default_system_cost_index": 0.05,
-    "default_facility_tax":     0.0,
-    "default_scc_surcharge":    0.015,
-    "default_broker_fee_pct":   0.03,
-    "default_sales_tax_pct":    0.08,
-    "default_price_source":     "sell",
+    "default_market_source":        "region:10000002",
+    "default_me_level":             0,
+    "default_system_cost_index":    0.05,
+    "default_facility_tax":         0.0,
+    "default_scc_surcharge":        0.015,
+    "default_broker_fee_pct":       0.03,
+    "default_sales_tax_pct":        0.08,
+    "default_price_source":         "sell",
+    "default_freight_cost_per_m3":  0.0,
+    "default_structure_me_bonus":   0.0,
+    "default_structure_te_bonus":   0.0,
 }
 
 
@@ -44,14 +47,17 @@ async def load_settings(db: AsyncSession) -> dict:
     if row is None:
         return dict(DEFAULTS)
     return {
-        "default_market_source":    row.default_market_source,
-        "default_me_level":         row.default_me_level,
-        "default_system_cost_index": row.default_system_cost_index,
-        "default_facility_tax":     row.default_facility_tax,
-        "default_scc_surcharge":    row.default_scc_surcharge,
-        "default_broker_fee_pct":   row.default_broker_fee_pct,
-        "default_sales_tax_pct":    row.default_sales_tax_pct,
-        "default_price_source":     row.default_price_source,
+        "default_market_source":        row.default_market_source,
+        "default_me_level":             row.default_me_level,
+        "default_system_cost_index":    row.default_system_cost_index,
+        "default_facility_tax":         row.default_facility_tax,
+        "default_scc_surcharge":        row.default_scc_surcharge,
+        "default_broker_fee_pct":       row.default_broker_fee_pct,
+        "default_sales_tax_pct":        row.default_sales_tax_pct,
+        "default_price_source":         row.default_price_source,
+        "default_freight_cost_per_m3":  getattr(row, "default_freight_cost_per_m3", 0.0),
+        "default_structure_me_bonus":   getattr(row, "default_structure_me_bonus", 0.0),
+        "default_structure_te_bonus":   getattr(row, "default_structure_te_bonus", 0.0),
     }
 
 
@@ -104,7 +110,10 @@ async def save_settings(
     default_scc_surcharge:    float = Form(default=0.015),
     default_broker_fee_pct:   float = Form(default=0.03),
     default_sales_tax_pct:    float = Form(default=0.08),
-    default_price_source:     str   = Form(default="sell"),
+    default_price_source:          str   = Form(default="sell"),
+    default_freight_cost_per_m3:   float = Form(default=0.0),
+    default_structure_me_bonus:    float = Form(default=0.0),
+    default_structure_te_bonus:    float = Form(default=0.0),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(UserSettings).where(UserSettings.id == SETTINGS_ID))
@@ -121,18 +130,24 @@ async def save_settings(
             default_broker_fee_pct=max(0.0, min(1.0, default_broker_fee_pct)),
             default_sales_tax_pct=max(0.0, min(1.0, default_sales_tax_pct)),
             default_price_source=default_price_source if default_price_source in ("sell", "buy") else "sell",
+            default_freight_cost_per_m3=max(0.0, default_freight_cost_per_m3),
+            default_structure_me_bonus=max(0.0, min(100.0, default_structure_me_bonus)),
+            default_structure_te_bonus=max(0.0, min(100.0, default_structure_te_bonus)),
             updated_at=datetime.utcnow(),
         ))
     else:
-        row.default_market_source    = default_market_source
-        row.default_me_level         = max(0, min(10, default_me_level))
-        row.default_system_cost_index = max(0.0, min(1.0, default_system_cost_index))
-        row.default_facility_tax     = max(0.0, min(1.0, default_facility_tax))
-        row.default_scc_surcharge    = max(0.0, min(1.0, default_scc_surcharge))
-        row.default_broker_fee_pct   = max(0.0, min(1.0, default_broker_fee_pct))
-        row.default_sales_tax_pct    = max(0.0, min(1.0, default_sales_tax_pct))
-        row.default_price_source     = default_price_source if default_price_source in ("sell", "buy") else "sell"
-        row.updated_at               = datetime.utcnow()
+        row.default_market_source       = default_market_source
+        row.default_me_level            = max(0, min(10, default_me_level))
+        row.default_system_cost_index   = max(0.0, min(1.0, default_system_cost_index))
+        row.default_facility_tax        = max(0.0, min(1.0, default_facility_tax))
+        row.default_scc_surcharge       = max(0.0, min(1.0, default_scc_surcharge))
+        row.default_broker_fee_pct      = max(0.0, min(1.0, default_broker_fee_pct))
+        row.default_sales_tax_pct       = max(0.0, min(1.0, default_sales_tax_pct))
+        row.default_price_source        = default_price_source if default_price_source in ("sell", "buy") else "sell"
+        row.default_freight_cost_per_m3 = max(0.0, default_freight_cost_per_m3)
+        row.default_structure_me_bonus  = max(0.0, min(100.0, default_structure_me_bonus))
+        row.default_structure_te_bonus  = max(0.0, min(100.0, default_structure_te_bonus))
+        row.updated_at                  = datetime.utcnow()
 
     await db.flush()
     return RedirectResponse(url="/settings/?saved=1", status_code=303)

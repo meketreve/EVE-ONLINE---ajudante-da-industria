@@ -56,6 +56,27 @@ async def create_tables():
     import app.models.production_queue  # noqa: F401
     import app.models.cache  # noqa: F401
     import app.models.market_structure  # noqa: F401
+    import app.models.market_snapshot  # noqa: F401
+    import app.models.user_settings  # noqa: F401
+    import app.models.reprocessing  # noqa: F401
+    import app.models.manufacturing_structure  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # Migrations: adiciona colunas novas sem destruir dados existentes.
+    # SQLite não suporta IF NOT EXISTS em ALTER TABLE — usa try/except por coluna.
+    from sqlalchemy import text
+    _migrations = [
+        "ALTER TABLE market_price_cache ADD COLUMN total_volume INTEGER",
+        "ALTER TABLE user_settings ADD COLUMN default_freight_cost_per_m3 REAL DEFAULT 0.0",
+        "ALTER TABLE items ADD COLUMN portion_size INTEGER DEFAULT 1",
+        "ALTER TABLE user_settings ADD COLUMN default_structure_me_bonus REAL DEFAULT 0.0",
+        "ALTER TABLE user_settings ADD COLUMN default_structure_te_bonus REAL DEFAULT 0.0",
+    ]
+    for sql in _migrations:
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(sql))
+        except Exception:
+            pass  # coluna já existe — ignora
