@@ -22,6 +22,10 @@ import bz2
 import tempfile
 from pathlib import Path
 
+# Garante que o terminal Windows aceite UTF-8 nos prints
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 import httpx
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ DiscoverySource   — registra de onde cada estrutura foi descoberta
 """
 
 from datetime import datetime
-from sqlalchemy import BigInteger, Integer, String, DateTime, UniqueConstraint
+from sqlalchemy import BigInteger, Integer, String, DateTime, UniqueConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database.database import Base
 
@@ -23,19 +23,23 @@ class Structure(Base):
         inactive         → /universe/structures/{id}/ retornou 404 (não existe mais)
     """
     __tablename__ = "structures"
+    __table_args__ = (
+        Index("ix_structures_status_crawled", "status", "last_crawled_at"),
+    )
 
-    structure_id:          Mapped[int]           = mapped_column(BigInteger, primary_key=True)
-    name:                  Mapped[str | None]     = mapped_column(String(512),  nullable=True)
-    type_id:               Mapped[int | None]     = mapped_column(Integer,      nullable=True)
-    owner_corporation_id:  Mapped[int | None]     = mapped_column(BigInteger,   nullable=True)
-    system_id:             Mapped[int | None]     = mapped_column(Integer,      nullable=True)
-    system_name:           Mapped[str | None]     = mapped_column(String(128),  nullable=True)
-    status:                Mapped[str]            = mapped_column(String(32),   nullable=False,
-                                                                  default="discovered", index=True)
-    first_seen_at:         Mapped[datetime]       = mapped_column(DateTime,     nullable=False,
-                                                                  default=datetime.utcnow)
-    last_resolved_at:      Mapped[datetime | None]= mapped_column(DateTime,     nullable=True)
-    last_crawled_at:       Mapped[datetime | None]= mapped_column(DateTime,     nullable=True)
+    structure_id:                   Mapped[int]           = mapped_column(BigInteger, primary_key=True)
+    name:                           Mapped[str | None]     = mapped_column(String(512),  nullable=True)
+    type_id:                        Mapped[int | None]     = mapped_column(Integer,      nullable=True)
+    owner_corporation_id:           Mapped[int | None]     = mapped_column(BigInteger,   nullable=True)
+    system_id:                      Mapped[int | None]     = mapped_column(Integer,      nullable=True)
+    system_name:                    Mapped[str | None]     = mapped_column(String(128),  nullable=True)
+    status:                         Mapped[str]            = mapped_column(String(32),   nullable=False,
+                                                                           default="discovered", index=True)
+    first_seen_at:                  Mapped[datetime]       = mapped_column(DateTime,     nullable=False,
+                                                                           default=datetime.utcnow)
+    last_resolved_at:               Mapped[datetime | None]= mapped_column(DateTime,     nullable=True)
+    last_crawled_at:                Mapped[datetime | None]= mapped_column(DateTime,     nullable=True)
+    last_successful_character_id:   Mapped[int | None]     = mapped_column(BigInteger,   nullable=True)
 
 
 class DiscoverySource(Base):

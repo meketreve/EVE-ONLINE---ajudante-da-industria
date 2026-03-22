@@ -1,12 +1,13 @@
 """
 Serviços relacionados ao personagem logado.
 
-- Refresh de token transparente
+- Refresh de token transparente (com lock por personagem para evitar race condition)
 - Busca de skills via ESI (com cache DB, TTL 1 h)
 - Cálculo de taxas de mercado baseadas nas skills
 - Busca de estruturas acessíveis (com cache DB, TTL 24 h)
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timedelta
@@ -19,6 +20,9 @@ from app.models.cache import SkillCache, StructureCache
 from app.services.esi_client import esi_client, ESIError
 
 logger = logging.getLogger(__name__)
+
+# Lock por character_id para evitar race condition no token refresh
+_token_locks: dict[int, asyncio.Lock] = {}
 
 SKILL_CACHE_TTL = timedelta(hours=1)
 STRUCTURE_CACHE_TTL = timedelta(hours=24)
@@ -129,17 +133,24 @@ async def get_fresh_token(character: Character, db: AsyncSession) -> str | None:
         return character.access_token
     if character.refresh_token is None:
         return None
-    try:
-        token_data = await esi_client.refresh_access_token(character.refresh_token)
-        character.access_token = token_data["access_token"]
-        character.refresh_token = token_data.get("refresh_token", character.refresh_token)
-        character.token_expiry = esi_client.compute_expiry(token_data.get("expires_in", 1200))
-        character.updated_at = datetime.utcnow()
-        await db.flush()
-        return character.access_token
-    except ESIError as exc:
-        logger.warning("Falha ao renovar token do personagem %s: %s", character.character_id, exc)
-        return None
+
+    # Garante que apenas uma corrotina renova o token por vez para este personagem
+    lock = _token_locks.setdefault(character.character_id, asyncio.Lock())
+    async with lock:
+        # Verifica novamente dentro do lock — outra tarefa pode ter renovado
+        if not character.is_token_expired():
+            return character.access_token
+        try:
+            token_data = await esi_client.refresh_access_token(character.refresh_token)
+            character.access_token = token_data["access_token"]
+            character.refresh_token = token_data.get("refresh_token", character.refresh_token)
+            character.token_expiry = esi_client.compute_expiry(token_data.get("expires_in", 1200))
+            character.updated_at = datetime.utcnow()
+            await db.flush()
+            return character.access_token
+        except ESIError as exc:
+            logger.warning("Falha ao renovar token do personagem %s: %s", character.character_id, exc)
+            return None
 
 
 # ---------------------------------------------------------------------------
@@ -278,25 +289,46 @@ async def get_market_options(character_id: int, db: AsyncSession) -> dict:
     """
     Retorna opções de mercado para o personagem.
 
-    Estruturas privadas são lidas da tabela `market_structures` (populada pelo
-    script atualizar_estruturas.py). Zero chamadas ESI neste fluxo.
+    Combina duas fontes de estruturas privadas:
+    - `market_structures`: populada pelo script atualizar_estruturas.py
+    - `structures`: populada pelo crawler interno do app (status market_accessible)
     """
     from app.models.market_structure import MarketStructure
+    from app.models.structure import Structure
 
     result: dict = {"groups": PUBLIC_MARKET_GROUPS, "private": []}
 
-    rows_result = await db.execute(
+    # Fonte 1: script atualizar_estruturas.py
+    ms_result = await db.execute(
         select(MarketStructure).order_by(MarketStructure.system_name, MarketStructure.name)
     )
-    structures = rows_result.scalars().all()
+    market_structs = ms_result.scalars().all()
 
-    for s in structures:
+    seen_ids: set[int] = set()
+    for s in market_structs:
+        seen_ids.add(s.structure_id)
         result["private"].append({
             "value": f"structure:{s.structure_id}",
             "label": f"{s.system_name} — {s.name}",
         })
 
-    if not structures:
+    # Fonte 2: crawler interno (tabela structures, status market_accessible)
+    cr_result = await db.execute(
+        select(Structure)
+        .where(Structure.status == "market_accessible")
+        .order_by(Structure.system_name, Structure.name)
+    )
+    crawler_structs = cr_result.scalars().all()
+
+    for s in crawler_structs:
+        if s.structure_id in seen_ids:
+            continue
+        result["private"].append({
+            "value": f"structure:{s.structure_id}",
+            "label": f"{s.system_name or '?'} — {s.name or str(s.structure_id)}",
+        })
+
+    if not result["private"]:
         result["private_hint"] = "Execute atualizar_estruturas.bat para importar estruturas privadas."
 
     return result

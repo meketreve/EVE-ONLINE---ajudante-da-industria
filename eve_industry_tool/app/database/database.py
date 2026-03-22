@@ -47,6 +47,12 @@ async def get_db():
             await session.close()
 
 
+# Alias usado pelas páginas NiceGUI (chamado diretamente, não como gerador)
+async def init_db():
+    """Inicializa o banco: cria tabelas e roda migrações."""
+    await create_tables()
+
+
 async def create_tables():
     # Import all models so that Base.metadata is populated before create_all
     import app.models.user  # noqa: F401
@@ -73,10 +79,24 @@ async def create_tables():
         "ALTER TABLE items ADD COLUMN portion_size INTEGER DEFAULT 1",
         "ALTER TABLE user_settings ADD COLUMN default_structure_me_bonus REAL DEFAULT 0.0",
         "ALTER TABLE user_settings ADD COLUMN default_structure_te_bonus REAL DEFAULT 0.0",
+        "ALTER TABLE structures ADD COLUMN last_successful_character_id INTEGER",
+        # production_queue: configuração do BOM
+        "ALTER TABLE production_queue ADD COLUMN me_level INTEGER DEFAULT 0",
+        "ALTER TABLE production_queue ADD COLUMN me_overrides_json TEXT DEFAULT '{}'",
+        "ALTER TABLE production_queue ADD COLUMN buy_as_is_json TEXT DEFAULT '[]'",
+        "ALTER TABLE production_queue ADD COLUMN structure_me_bonus REAL DEFAULT 0.0",
+        "ALTER TABLE production_queue ADD COLUMN manufacturing_struct_id INTEGER",
+        "ALTER TABLE production_queue ADD COLUMN market_source TEXT DEFAULT 'region:10000002'",
+        "ALTER TABLE production_queue ADD COLUMN station_overrides_json TEXT DEFAULT '{}'",
+        "ALTER TABLE production_queue ADD COLUMN note TEXT",
     ]
     for sql in _migrations:
         try:
             async with engine.begin() as conn:
                 await conn.execute(text(sql))
-        except Exception:
-            pass  # coluna já existe — ignora
+        except Exception as _exc:
+            _msg = str(_exc).lower()
+            if "already exists" in _msg or "duplicate column" in _msg:
+                pass  # coluna já existe — ignora
+            else:
+                raise  # erro real — propaga

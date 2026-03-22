@@ -7,13 +7,16 @@ e removidas após 48h pelo job de limpeza.
 """
 
 from datetime import datetime
-from sqlalchemy import BigInteger, Integer, DateTime, Boolean, Float
+from sqlalchemy import BigInteger, Integer, DateTime, Boolean, Float, Index
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database.database import Base
 
 
 class MarketOrder(Base):
     __tablename__ = "market_orders_raw"
+    __table_args__ = (
+        Index("ix_orders_structure_stale_type", "structure_id", "is_stale", "type_id"),
+    )
 
     order_id:      Mapped[int]      = mapped_column(BigInteger, primary_key=True)
     structure_id:  Mapped[int]      = mapped_column(BigInteger, nullable=False, index=True)

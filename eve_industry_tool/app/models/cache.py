@@ -8,7 +8,7 @@ SkillCache        — skills de personagens                  (TTL: 1 h)
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Float, Integer, String, DateTime, UniqueConstraint
+from sqlalchemy import BigInteger, Float, Integer, String, DateTime, UniqueConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.database import Base
@@ -21,6 +21,7 @@ class MarketPriceCache(Base):
             "type_id", "market_type", "market_id", "order_type",
             name="uq_market_price",
         ),
+        Index("ix_price_cache_market", "market_type", "market_id", "order_type"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

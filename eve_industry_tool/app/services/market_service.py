@@ -209,6 +209,35 @@ async def get_best_price(
     return price
 
 
+async def _read_price_cache_batch(
+    db: AsyncSession,
+    type_ids: list[int],
+    market_type: str,
+    market_id: int,
+    order_type: str,
+) -> dict[int, float | None | object]:
+    """
+    Lê o cache de preços para múltiplos type_ids em uma única query SELECT IN.
+    Retorna {type_id: price | _MISS}.
+    """
+    ttl = _cache_ttl(market_type)
+    result = await db.execute(
+        select(MarketPriceCache).where(
+            MarketPriceCache.type_id.in_(type_ids),
+            MarketPriceCache.market_type == market_type,
+            MarketPriceCache.market_id == market_id,
+            MarketPriceCache.order_type == order_type,
+        )
+    )
+    rows = result.scalars().all()
+    out: dict[int, float | None | object] = {tid: _MISS for tid in type_ids}
+    now = datetime.utcnow()
+    for row in rows:
+        if (now - row.fetched_at) <= ttl:
+            out[row.type_id] = row.price
+    return out
+
+
 async def get_prices_for_materials(
     type_ids: list[int],
     region_id: int = THE_FORGE_REGION_ID,
@@ -217,19 +246,17 @@ async def get_prices_for_materials(
 ) -> dict[int, float | None]:
     """
     Preços em bulk para uma lista de type_ids.
-    Verifica cache primeiro; faz chamadas ESI apenas para os que faltam.
+    Verifica cache em uma única query batch; faz chamadas ESI apenas para os que faltam.
     """
     import asyncio
 
     price_map: dict[int, float | None] = {}
     missing: list[int] = []
 
-    # Lê cache em paralelo
+    # Lê cache em uma única query batch (em vez de N tarefas paralelas)
     if db is not None:
-        cached_results = await asyncio.gather(
-            *[_read_price_cache(db, tid, "region", region_id, order_type) for tid in type_ids]
-        )
-        for tid, cached in zip(type_ids, cached_results):
+        batch_result = await _read_price_cache_batch(db, type_ids, "region", region_id, order_type)
+        for tid, cached in batch_result.items():
             if cached is _MISS:
                 missing.append(tid)
             else:
@@ -274,6 +301,75 @@ async def get_best_price_structure(
     return prices.get(type_id)
 
 
+async def get_volumes_cache_only(
+    type_ids: list[int],
+    market_type: str,
+    market_id: int,
+    order_type: str,
+    db: AsyncSession,
+) -> dict[int, int | None]:
+    """
+    Lê total_volume do cache para múltiplos type_ids sem checar TTL.
+    Retorna {type_id: total_volume | None}.
+    """
+    from sqlalchemy import select as _select
+    result = await db.execute(
+        _select(MarketPriceCache.type_id, MarketPriceCache.total_volume).where(
+            MarketPriceCache.type_id.in_(type_ids),
+            MarketPriceCache.market_type == market_type,
+            MarketPriceCache.market_id == market_id,
+            MarketPriceCache.order_type == order_type,
+        )
+    )
+    rows = result.all()
+    vol_map: dict[int, int | None] = {tid: None for tid in type_ids}
+    for row in rows:
+        vol_map[row.type_id] = row.total_volume
+    return vol_map
+
+
+async def refresh_region_market_prices(region_id: int, db: AsyncSession) -> int:
+    """
+    Baixa TODAS as ordens de uma região via ESI e popula o cache de preços.
+    Muito mais eficiente que buscar type_id por type_id.
+    Retorna o número de type_ids cacheados.
+    """
+    from collections import defaultdict
+
+    try:
+        all_orders = await esi_client.get_all_region_orders(region_id)
+    except ESIError as exc:
+        logger.error("Falha ao buscar ordens da região %s: %s", region_id, exc)
+        return 0
+
+    by_type: dict[int, dict] = defaultdict(
+        lambda: {"sell_prices": [], "buy_prices": [], "sell_vol": 0, "buy_vol": 0}
+    )
+    for order in all_orders:
+        tid = order.get("type_id")
+        if not isinstance(tid, int):
+            continue
+        price = order.get("price", 0.0)
+        vol = order.get("volume_remain", 0)
+        if order.get("is_buy_order", False):
+            by_type[tid]["buy_prices"].append(price)
+            by_type[tid]["buy_vol"] += vol
+        else:
+            by_type[tid]["sell_prices"].append(price)
+            by_type[tid]["sell_vol"] += vol
+
+    count = 0
+    for tid, data in by_type.items():
+        if data["sell_prices"]:
+            sell_price = min(data["sell_prices"])
+            await _write_price_cache(db, tid, "region", region_id, "sell", sell_price, data["sell_vol"])
+            count += 1
+        if data["buy_prices"]:
+            buy_price = max(data["buy_prices"])
+            await _write_price_cache(db, tid, "region", region_id, "buy", buy_price, data["buy_vol"])
+    return count
+
+
 async def get_prices_for_materials_structure(
     type_ids: list[int],
     structure_id: int,
@@ -293,10 +389,8 @@ async def get_prices_for_materials_structure(
     missing: list[int] = []
 
     if db is not None:
-        cached_results = await asyncio.gather(
-            *[_read_price_cache(db, tid, "structure", structure_id, order_type) for tid in type_ids]
-        )
-        for tid, cached in zip(type_ids, cached_results):
+        batch_result = await _read_price_cache_batch(db, type_ids, "structure", structure_id, order_type)
+        for tid, cached in batch_result.items():
             if cached is _MISS:
                 missing.append(tid)
             else:

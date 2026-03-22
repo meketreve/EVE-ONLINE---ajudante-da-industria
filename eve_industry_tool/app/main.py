@@ -1,20 +1,20 @@
 """
-EVE Industry Profit Tool - FastAPI application entry point.
+EVE Industry Tool — NiceGUI desktop application entry point.
+
+Replaces the previous FastAPI/Jinja2/HTMX stack with a native NiceGUI
+desktop app (pywebview window).
 """
 
 import asyncio
 import logging
-from contextlib import asynccontextmanager
+import secrets
+from datetime import datetime
+from urllib.parse import urlencode, parse_qs, urlparse
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from starlette.middleware.sessions import SessionMiddleware
+from nicegui import ui, app as nicegui_app
 
 from app.config import settings
-from app.database.database import create_tables
-from app.api import auth, items, industry, market
+from app.database.database import init_db, AsyncSessionLocal
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,9 +23,182 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ── Importa todas as páginas (registra as rotas @ui.page) ────────────────────
+from app.ui import auth_page         # noqa: F401  /  /login
+from app.ui import dashboard_page    # noqa: F401  /dashboard
+from app.ui import items_page        # noqa: F401  /items
+from app.ui import industry_page     # noqa: F401  /industry
+from app.ui import reprocessing_page # noqa: F401  /reprocessing
+from app.ui import queue_page        # noqa: F401  /queue
+from app.ui import ranking_page      # noqa: F401  /ranking
+from app.ui import ranking_item_page # noqa: F401  /ranking_item
+from app.ui import settings_page     # noqa: F401  /settings
+
+
+# ── OAuth2 Callback ───────────────────────────────────────────────────────────
+
+async def handle_oauth_callback(request):
+    """
+    Processa o retorno do EVE SSO após autenticação.
+    Troca o authorization code por tokens e persiste o personagem no banco.
+    """
+    from starlette.responses import HTMLResponse
+    from sqlalchemy import select
+
+    from app.models.character import Character
+    from app.models.user import User
+    from app.services.esi_client import esi_client, ESIError
+
+    try:
+        params = dict(request.query_params)
+        code  = params.get("code")
+        state = params.get("state")
+        error = params.get("error")
+
+        if error:
+            logger.warning("EVE SSO retornou erro: %s", error)
+            return HTMLResponse(_callback_html("Erro SSO", f"EVE SSO retornou: {error}", success=False))
+
+        if not code:
+            return HTMLResponse(_callback_html("Erro", "Código de autorização ausente.", success=False))
+
+        # Troca o código por tokens
+        try:
+            token_data = await esi_client.exchange_code_for_token(code)
+        except ESIError as exc:
+            logger.error("Falha na troca de token: %s", exc)
+            return HTMLResponse(_callback_html("Erro", f"Falha na autenticação: {exc}", success=False))
+
+        access_token  = token_data["access_token"]
+        refresh_token = token_data.get("refresh_token", "")
+        expires_in    = token_data.get("expires_in", 1200)
+        token_expiry  = esi_client.compute_expiry(expires_in)
+
+        # Verifica token e obtém info do personagem
+        try:
+            verify_data = await esi_client.verify_token(access_token)
+        except ESIError as exc:
+            logger.error("Falha na verificação do token: %s", exc)
+            return HTMLResponse(_callback_html("Erro", f"Falha na verificação: {exc}", success=False))
+
+        character_id   = int(verify_data.get("CharacterID", 0))
+        character_name = verify_data.get("CharacterName", "Unknown")
+
+        if not character_id:
+            return HTMLResponse(_callback_html("Erro", "ID de personagem inválido.", success=False))
+
+        # Informações adicionais do personagem
+        corporation_id: int | None = None
+        try:
+            char_info = await esi_client.get_character_info(character_id)
+            corporation_id = char_info.get("corporation_id")
+        except ESIError:
+            pass
+
+        # Upsert do personagem no banco
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Character).where(Character.character_id == character_id)
+            )
+            character = result.scalar_one_or_none()
+
+            if character is None:
+                character = Character(
+                    character_id=character_id,
+                    character_name=character_name,
+                    access_token=access_token,
+                    refresh_token=refresh_token,
+                    token_expiry=token_expiry,
+                    corporation_id=corporation_id,
+                )
+                db.add(character)
+            else:
+                character.character_name = character_name
+                character.access_token   = access_token
+                character.refresh_token  = refresh_token
+                character.token_expiry   = token_expiry
+                character.corporation_id = corporation_id
+                character.updated_at     = datetime.utcnow()
+
+            await db.flush()
+
+            # Garante que existe uma linha User vinculada
+            user_result = await db.execute(
+                select(User).where(User.character_id == character_id)
+            )
+            if user_result.scalar_one_or_none() is None:
+                db.add(User(character_id=character_id))
+
+            await db.commit()
+
+        # Armazena na sessão NiceGUI (app.storage.general é por-browser)
+        # Como é app nativo, existe apenas um "usuário"
+        nicegui_app.storage.general["character_id"]   = character_id
+        nicegui_app.storage.general["character_name"] = character_name
+        nicegui_app.storage.general["access_token"]   = access_token
+
+        logger.info("Login bem-sucedido: %s (%d)", character_name, character_id)
+
+        return HTMLResponse(_callback_html(
+            "Login realizado!",
+            f"Bem-vindo, {character_name}! Você pode fechar esta janela.",
+            success=True,
+        ))
+
+    except Exception as exc:
+        logger.error("Erro no callback OAuth: %s", exc, exc_info=True)
+        return HTMLResponse(_callback_html("Erro Interno", str(exc), success=False))
+
+
+def _callback_html(title: str, message: str, success: bool) -> str:
+    """Gera HTML simples para a janela de callback do OAuth."""
+    color = "#4caf50" if success else "#f44336"
+    redirect_script = """
+        <script>
+            setTimeout(function() {
+                window.close();
+                // tenta redirecionar a janela principal
+                try { window.opener.location.href = '/dashboard'; } catch(e) {}
+            }, 2000);
+        </script>
+    """ if success else ""
+
+    return f"""<!DOCTYPE html>
+<html>
+<head><title>{title}</title>
+<style>
+  body {{ font-family: sans-serif; background: #1a1a2e; color: #eee;
+         display: flex; align-items: center; justify-content: center;
+         height: 100vh; margin: 0; }}
+  .card {{ background: #16213e; padding: 2rem 3rem; border-radius: 8px;
+           text-align: center; border-left: 4px solid {color}; }}
+  h2 {{ color: {color}; }}
+</style>
+</head>
+<body>
+  <div class="card">
+    <h2>{title}</h2>
+    <p>{message}</p>
+    <small style="color: #888;">Esta janela fechará automaticamente...</small>
+  </div>
+  {redirect_script}
+</body>
+</html>"""
+
+
+# ── Importa User model (necessário para o callback) ───────────────────────────
+from app.models.user import User  # noqa: E402
+
+
+# ── Registra a rota de callback no servidor NiceGUI ───────────────────────────
+nicegui_app.add_route("/auth/callback", handle_oauth_callback)
+
+
+# ── Scheduler periódico ───────────────────────────────────────────────────────
+
 async def _scheduler_loop() -> None:
     """
-    Scheduler periódico (sem Redis/Celery).
+    Scheduler sem Redis/Celery.
     - A cada 15 min: recrawl de todas as estruturas com mercado acessível
     - A cada 1h:     limpeza de ordens stale antigas
     - A cada 6h:     rediscovery de assets para todos os personagens
@@ -33,7 +206,7 @@ async def _scheduler_loop() -> None:
     from app.services.crawler_service import schedule_recrawl_all, cleanup_stale_orders
     from app.services.discovery_service import _do_asset_discovery_all
 
-    CRAWL_INTERVAL    = 15 * 60   # segundos
+    CRAWL_INTERVAL    = 15 * 60
     CLEANUP_INTERVAL  = 60 * 60
     DISCOVER_INTERVAL = 6 * 60 * 60
 
@@ -42,7 +215,7 @@ async def _scheduler_loop() -> None:
     last_discover = 0.0
 
     while True:
-        await asyncio.sleep(60)  # tick a cada minuto
+        await asyncio.sleep(60)
         now = asyncio.get_event_loop().time()
 
         if now - last_crawl >= CRAWL_INTERVAL:
@@ -67,313 +240,74 @@ async def _scheduler_loop() -> None:
                 logger.error("[scheduler] discovery geral falhou: %s", exc)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Startup: cria tabelas, inicia workers e scheduler. Shutdown: libera recursos."""
-    logger.info("Starting up — criando tabelas do banco...")
+# ── Startup ───────────────────────────────────────────────────────────────────
 
-    # Importa todos os modelos para garantir que as tabelas sejam criadas
-    import app.models.user, app.models.character, app.models.item
-    import app.models.blueprint, app.models.production_queue
-    import app.models.cache, app.models.market_structure
-    import app.models.structure, app.models.market_order
-    import app.models.market_snapshot, app.models.job
-    import app.models.user_settings
-    import app.models.manufacturing_structure
+@nicegui_app.on_startup
+async def startup():
+    """Startup: inicializa BD, workers e scheduler."""
+    logger.info("Startup — inicializando banco de dados...")
 
-    await create_tables()
-    logger.info("Tabelas prontas.")
+    # Importa todos os modelos para popular Base.metadata
+    import app.models.user               # noqa: F401
+    import app.models.character          # noqa: F401
+    import app.models.item               # noqa: F401
+    import app.models.blueprint          # noqa: F401
+    import app.models.production_queue   # noqa: F401
+    import app.models.cache              # noqa: F401
+    import app.models.market_structure   # noqa: F401
+    import app.models.structure          # noqa: F401
+    import app.models.market_order       # noqa: F401
+    import app.models.market_snapshot    # noqa: F401
+    import app.models.job                # noqa: F401
+    import app.models.user_settings      # noqa: F401
+    import app.models.reprocessing       # noqa: F401
+    import app.models.manufacturing_structure  # noqa: F401
 
-    # Inicia workers das filas
+    await init_db()
+    logger.info("Banco inicializado.")
+
+    # Login é obrigatório a cada inicialização — limpa sessão anterior
+    for _key in ("character_name", "character_id", "access_token"):
+        nicegui_app.storage.general.pop(_key, None)
+    logger.info("Sessão de autenticação limpa.")
+
+    # Inicia workers de job
     from app.services.job_runner import discovery_runner, crawl_runner
     discovery_runner.start()
     crawl_runner.start()
     logger.info("Workers iniciados.")
 
     # Inicia scheduler
-    scheduler_task = asyncio.create_task(_scheduler_loop(), name="scheduler")
+    asyncio.create_task(_scheduler_loop(), name="scheduler")
     logger.info("Scheduler iniciado.")
 
-    yield
+    logger.info("EVE Industry Tool pronto.")
 
-    # Shutdown
-    scheduler_task.cancel()
+
+# ── Shutdown ──────────────────────────────────────────────────────────────────
+
+@nicegui_app.on_shutdown
+async def shutdown():
+    """Shutdown: para workers e fecha conexões."""
+    from app.services.job_runner import discovery_runner, crawl_runner
     await discovery_runner.stop()
     await crawl_runner.stop()
 
     from app.services.esi_client import esi_client
     await esi_client.close()
+
     logger.info("Shutdown concluído.")
 
 
-app = FastAPI(
-    title="EVE Industry Profit Tool",
-    description="Local web application for EVE Online industry cost and profit analysis.",
-    version="1.0.0",
-    lifespan=lifespan,
-)
+# ── Entry point ───────────────────────────────────────────────────────────────
 
-# Session middleware (uses itsdangerous under the hood via Starlette)
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=settings.SECRET_KEY,
-    session_cookie="eve_industry_session",
-    max_age=86400 * 7,  # 7 days
-    same_site="lax",
-    https_only=False,  # local dev, no HTTPS required
-)
-
-# Static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Templates
-templates = Jinja2Templates(directory="app/templates")
-
-# Routers
-app.include_router(auth.router)
-app.include_router(items.router)
-app.include_router(industry.router)
-app.include_router(market.router)
-
-from app.api import discovery
-app.include_router(discovery.router)
-
-from app.api import settings as settings_api
-app.include_router(settings_api.router)
-
-from app.api import reprocessing as reprocessing_api
-app.include_router(reprocessing_api.router)
-
-from app.api import manufacturing_structures as mfg_structs_api
-app.include_router(mfg_structs_api.router)
-
-
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    """Dashboard / home page."""
-    character_name = request.session.get("character_name")
-    character_id = request.session.get("character_id")
-
-    context = {
-        "request": request,
-        "character_name": character_name,
-        "character_id": character_id,
-    }
-    return templates.TemplateResponse("index.html", context)
-
-
-@app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
-    """Standalone login page."""
-    return templates.TemplateResponse(
-        "login.html",
-        {"request": request, "character_name": request.session.get("character_name")},
+if __name__ in {"__main__", "__mp_main__"}:
+    ui.run(
+        native=True,
+        title="EVE Industry Tool",
+        window_size=(1400, 900),
+        reload=False,
+        port=8765,
+        storage_secret=settings.SECRET_KEY,
+        dark=True,
     )
-
-
-@app.get("/queue", response_class=HTMLResponse)
-async def production_queue_page(request: Request):
-    """Production queue page."""
-    from sqlalchemy.ext.asyncio import AsyncSession
-    from sqlalchemy import select
-    from app.database.database import AsyncSessionLocal
-    from app.models.production_queue import ProductionQueue
-    from app.models.item import Item
-
-    character_id = request.session.get("character_id")
-    queue_items: list[dict] = []
-
-    if character_id:
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(ProductionQueue).where(
-                    ProductionQueue.character_id == character_id
-                ).order_by(ProductionQueue.created_at.desc())
-            )
-            queue_entries = result.scalars().all()
-
-            for entry in queue_entries:
-                item_result = await db.execute(
-                    select(Item).where(Item.type_id == entry.item_type_id)
-                )
-                item = item_result.scalar_one_or_none()
-                queue_items.append(
-                    {
-                        "id": entry.id,
-                        "item_name": item.type_name if item else f"Type {entry.item_type_id}",
-                        "type_id": entry.item_type_id,
-                        "quantity": entry.quantity,
-                        "status": entry.status,
-                        "created_at": entry.created_at,
-                    }
-                )
-
-    return templates.TemplateResponse(
-        "production_queue.html",
-        {
-            "request": request,
-            "character_name": request.session.get("character_name"),
-            "queue_items": queue_items,
-        },
-    )
-
-
-@app.post("/queue/add")
-async def add_to_queue(request: Request):
-    """Add an item to the production queue (requires login)."""
-    from fastapi.responses import RedirectResponse
-    from app.database.database import AsyncSessionLocal
-    from app.models.production_queue import ProductionQueue
-
-    character_id = request.session.get("character_id")
-    if not character_id:
-        return RedirectResponse(url="/login", status_code=303)
-
-    form = await request.form()
-    type_id = int(form.get("type_id", 0))
-    quantity = int(form.get("quantity", 1))
-
-    if type_id:
-        async with AsyncSessionLocal() as db:
-            entry = ProductionQueue(
-                character_id=character_id,
-                item_type_id=type_id,
-                quantity=max(1, quantity),
-                status="pending",
-            )
-            db.add(entry)
-            await db.commit()
-
-    return RedirectResponse(url="/queue", status_code=303)
-
-
-@app.get("/queue/bom", response_class=HTMLResponse)
-async def queue_aggregate_bom(request: Request):
-    """
-    Computa o BOM agregado de todos os itens na fila de produção.
-    Retorna um fragmento HTML (HTMX) com a lista total de materiais a comprar.
-    """
-    from sqlalchemy import select
-    from app.database.database import AsyncSessionLocal
-    from app.models.production_queue import ProductionQueue
-    from app.models.item import Item
-    from app.services.blueprint_service import get_recursive_bom, aggregate_bom_leaves
-    from app.services.market_service import get_prices_cache_only
-    from app.api.settings import load_settings
-
-    character_id = request.session.get("character_id")
-    if not character_id:
-        return templates.TemplateResponse(
-            "partials/queue_bom.html",
-            {"request": request, "error": "Login necessário."},
-        )
-
-    async with AsyncSessionLocal() as db:
-        settings = await load_settings(db)
-        me_level    = settings.get("default_me_level", 0)
-        me_bonus    = settings.get("default_structure_me_bonus", 0.0)
-        mkt_source  = settings.get("default_market_source", "region:10000002")
-        price_src   = settings.get("default_price_source", "sell")
-
-        try:
-            mkt_type, mkt_id_str = mkt_source.split(":", 1)
-            mkt_id = int(mkt_id_str)
-        except (ValueError, AttributeError):
-            mkt_type, mkt_id = "region", 10000002
-
-        result = await db.execute(
-            select(ProductionQueue).where(
-                ProductionQueue.character_id == character_id,
-                ProductionQueue.status != "completed",
-            ).order_by(ProductionQueue.created_at.desc())
-        )
-        entries = result.scalars().all()
-
-        if not entries:
-            return templates.TemplateResponse(
-                "partials/queue_bom.html",
-                {"request": request, "empty": True},
-            )
-
-        # Agrega folhas do BOM de cada item da fila
-        total_leaves: dict[int, int] = {}
-        queue_summary: list[dict] = []
-
-        for entry in entries:
-            item_res = await db.execute(select(Item).where(Item.type_id == entry.item_type_id))
-            item = item_res.scalar_one_or_none()
-            item_name = item.type_name if item else f"Type {entry.item_type_id}"
-
-            bom = await get_recursive_bom(
-                entry.item_type_id, db,
-                runs=entry.quantity,
-                me_level=me_level,
-                structure_me_bonus=me_bonus,
-            )
-            leaves = aggregate_bom_leaves(bom)
-            for tid, qty in leaves.items():
-                total_leaves[tid] = total_leaves.get(tid, 0) + qty
-
-            queue_summary.append({"name": item_name, "type_id": entry.item_type_id, "runs": entry.quantity})
-
-        # Busca preços do cache
-        mat_ids = list(total_leaves.keys())
-        price_map, _ = await get_prices_cache_only(mat_ids, mkt_type, mkt_id, price_src, db)
-
-        # Busca nomes dos materiais
-        name_res = await db.execute(
-            select(Item.type_id, Item.type_name).where(Item.type_id.in_(mat_ids))
-        )
-        name_map = {r.type_id: r.type_name for r in name_res.all()}
-
-        # Monta lista de compras
-        shopping_list = []
-        total_cost = 0.0
-        for tid, qty in sorted(total_leaves.items(), key=lambda x: name_map.get(x[0], "")):
-            price = price_map.get(tid)
-            cost  = (price or 0.0) * qty
-            total_cost += cost
-            shopping_list.append({
-                "type_id":    tid,
-                "name":       name_map.get(tid, f"Type {tid}"),
-                "quantity":   qty,
-                "unit_price": price,
-                "total_cost": cost,
-            })
-
-    return templates.TemplateResponse(
-        "partials/queue_bom.html",
-        {
-            "request":       request,
-            "shopping_list": shopping_list,
-            "queue_summary": queue_summary,
-            "total_cost":    total_cost,
-            "market_source": mkt_source,
-            "me_level":      me_level,
-            "me_bonus":      me_bonus,
-        },
-    )
-
-
-@app.delete("/queue/{entry_id}")
-async def remove_from_queue(entry_id: int, request: Request):
-    """Remove an item from the production queue."""
-    from fastapi.responses import Response
-    from sqlalchemy import select, delete
-    from app.database.database import AsyncSessionLocal
-    from app.models.production_queue import ProductionQueue
-
-    character_id = request.session.get("character_id")
-    if not character_id:
-        return Response(status_code=401)
-
-    async with AsyncSessionLocal() as db:
-        await db.execute(
-            delete(ProductionQueue).where(
-                ProductionQueue.id == entry_id,
-                ProductionQueue.character_id == character_id,
-            )
-        )
-        await db.commit()
-
-    return Response(status_code=200)

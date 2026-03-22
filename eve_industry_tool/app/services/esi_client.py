@@ -67,31 +67,55 @@ class ESIClient:
     async def _get_paginated(
         self, url: str, token: str | None = None, params: dict | None = None
     ) -> list:
-        """Fetch all pages of a paginated ESI endpoint."""
-        params = dict(params or {})
-        params["page"] = 1
-        results: list = []
-        headers = {}
+        """
+        Fetch all pages of a paginated ESI endpoint.
+
+        Estratégia:
+          1. Busca a página 1 para obter X-Pages
+          2. Busca as páginas 2..N concorrentemente com Semaphore(5)
+        """
+        import asyncio
+
+        base_params = dict(params or {})
+        headers: dict[str, str] = {}
         if token:
             headers["Authorization"] = f"Bearer {token}"
 
-        while True:
-            try:
-                response = await self.client.get(url, headers=headers, params=params)
-                response.raise_for_status()
-                page_data = response.json()
-                if not page_data:
-                    break
-                results.extend(page_data)
-                total_pages = int(response.headers.get("X-Pages", 1))
-                if params["page"] >= total_pages:
-                    break
-                params["page"] += 1
-            except httpx.HTTPStatusError as exc:
-                raise ESIError(exc.response.status_code, exc.response.text) from exc
-            except httpx.RequestError as exc:
-                raise ESIError(0, str(exc)) from exc
+        # Página 1 — síncrona para obter X-Pages
+        p1_params = {**base_params, "page": 1}
+        try:
+            response = await self.client.get(url, headers=headers, params=p1_params)
+            response.raise_for_status()
+            total_pages = int(response.headers.get("X-Pages", 1))
+            page1_data: list = response.json() or []
+        except httpx.HTTPStatusError as exc:
+            raise ESIError(exc.response.status_code, exc.response.text) from exc
+        except httpx.RequestError as exc:
+            raise ESIError(0, str(exc)) from exc
 
+        if total_pages <= 1:
+            return page1_data
+
+        # Páginas 2..N — concorrentes, máximo 5 simultâneos
+        sem = asyncio.Semaphore(5)
+
+        async def _fetch_page(page: int) -> list:
+            async with sem:
+                p_params = {**base_params, "page": page}
+                try:
+                    resp = await self.client.get(url, headers=headers, params=p_params)
+                    resp.raise_for_status()
+                    return resp.json() or []
+                except httpx.HTTPStatusError as exc:
+                    raise ESIError(exc.response.status_code, exc.response.text) from exc
+                except httpx.RequestError as exc:
+                    raise ESIError(0, str(exc)) from exc
+
+        rest = await asyncio.gather(*[_fetch_page(p) for p in range(2, total_pages + 1)])
+
+        results = page1_data[:]
+        for page_data in rest:
+            results.extend(page_data)
         return results
 
     # ------------------------------------------------------------------
@@ -133,6 +157,11 @@ class ESIClient:
         """
         url = f"{settings.ESI_BASE_URL}/characters/{character_id}/assets/"
         return await self._get_paginated(url, token=token)
+
+    async def get_all_region_orders(self, region_id: int) -> list:
+        """Fetch ALL market orders for a region without type filter (paginated)."""
+        url = f"{settings.ESI_BASE_URL}/markets/{region_id}/orders/"
+        return await self._get_paginated(url, params={"order_type": "all"})
 
     async def get_market_history(self, region_id: int, type_id: int) -> list:
         """

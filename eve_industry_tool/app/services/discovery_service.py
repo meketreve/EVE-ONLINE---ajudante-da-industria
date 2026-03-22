@@ -310,7 +310,9 @@ async def _do_asset_discovery_all() -> None:
     """
     Enfileira discovery de assets para todos os personagens autenticados.
     Chamado pelo scheduler a cada 6h.
+    Utiliza asyncio.gather para paralelizar o enfileiramento.
     """
+    import asyncio
     from app.models.character import Character
     from sqlalchemy import select
 
@@ -321,10 +323,12 @@ async def _do_asset_discovery_all() -> None:
         )
         char_ids = [row[0] for row in result.all()]
 
-    for char_id in char_ids:
+    async def _enqueue_one(char_id: int) -> None:
         await discovery_runner.enqueue(
             f"discovery:assets:{char_id}",
             _run_asset_discovery_job,
             0,      # job_id placeholder (sem registro no DB nesta chamada)
             char_id,
         )
+
+    await asyncio.gather(*[_enqueue_one(cid) for cid in char_ids])

@@ -35,6 +35,7 @@ class BOMNode:
     - children    : materiais necessários para fabricá-lo (vazio se leaf/buy)
     - blueprint_runs  : quantas runs de blueprint são necessárias
     - product_per_run : quantidade produzida por run do blueprint
+    - station_id  : ID da ManufacturingStructure usada para este nó (None = global)
     """
     type_id: int
     type_name: str
@@ -46,11 +47,222 @@ class BOMNode:
     me_level: int = 0
     unit_price: float = 0.0
     buy_as_is: bool = False
+    station_id: int | None = None
     children: list["BOMNode"] = field(default_factory=list)
 
     @property
     def is_leaf(self) -> bool:
         return not self.children
+
+
+def _collect_required_type_ids(
+    product_type_id: int,
+    blueprints_by_product: dict[int, "Blueprint"],
+    materials_by_blueprint: dict[int, list[dict]],
+    visited: frozenset[int] = frozenset(),
+) -> set[int]:
+    """
+    Coleta todos os type_ids necessários para expandir o BOM recursivamente.
+    Usado para pré-carregar itens e blueprints em batch.
+    """
+    ids: set[int] = {product_type_id}
+    if product_type_id in visited:
+        return ids
+    bp = blueprints_by_product.get(product_type_id)
+    if bp is None:
+        return ids
+    new_visited = visited | {product_type_id}
+    for mat in materials_by_blueprint.get(bp.blueprint_type_id, []):
+        ids.add(mat["type_id"])
+        ids |= _collect_required_type_ids(
+            mat["type_id"], blueprints_by_product, materials_by_blueprint, new_visited
+        )
+    return ids
+
+
+async def _prefetch_bom_data(
+    root_type_id: int,
+    db: AsyncSession,
+) -> tuple[dict[int, "Blueprint"], dict[int, list[dict]], dict[int, str]]:
+    """
+    Pré-carrega todos blueprints, materiais e nomes de itens necessários para
+    expandir o BOM do `root_type_id`, fazendo apenas 2+1 queries ao banco.
+
+    Retorna:
+      blueprints_by_product: {product_type_id: Blueprint}
+      materials_by_blueprint: {blueprint_type_id: [{"type_id": int, "quantity": int}]}
+      item_names: {type_id: name}
+    """
+    from app.models.item import Item
+
+    blueprints_by_product: dict[int, Blueprint] = {}
+    materials_by_blueprint: dict[int, list[dict]] = {}
+    item_names: dict[int, str] = {}
+
+    # Fila BFS para descobrir todos os type_ids necessários iterativamente
+    to_check: set[int] = {root_type_id}
+    checked:  set[int] = set()
+
+    while to_check:
+        batch = to_check - checked
+        if not batch:
+            break
+        checked |= batch
+
+        # Busca blueprints em batch
+        bp_result = await db.execute(
+            select(Blueprint).where(Blueprint.product_type_id.in_(list(batch)))
+        )
+        new_bps = bp_result.scalars().all()
+        for bp in new_bps:
+            blueprints_by_product[bp.product_type_id] = bp
+
+        # Busca materiais para esses blueprints em batch
+        bp_type_ids = [bp.blueprint_type_id for bp in new_bps]
+        if bp_type_ids:
+            # Tenta BlueprintMaterial normalizado primeiro
+            mat_result = await db.execute(
+                select(BlueprintMaterial).where(BlueprintMaterial.blueprint_id.in_(
+                    [bp.id for bp in new_bps]
+                ))
+            )
+            mat_rows = mat_result.scalars().all()
+
+            # Agrupa por blueprint_id → blueprint_type_id
+            bp_id_to_type_id = {bp.id: bp.blueprint_type_id for bp in new_bps}
+            mats_by_bp_id: dict[int, list[BlueprintMaterial]] = {}
+            for m in mat_rows:
+                mats_by_bp_id.setdefault(m.blueprint_id, []).append(m)
+
+            for bp in new_bps:
+                raw_mats = mats_by_bp_id.get(bp.id)
+                if raw_mats:
+                    adj = [
+                        {"type_id": m.material_type_id, "quantity": m.quantity}
+                        for m in raw_mats
+                    ]
+                elif bp.materials:
+                    adj = [
+                        {"type_id": m["type_id"], "quantity": m["quantity"]}
+                        for m in bp.materials
+                    ]
+                else:
+                    adj = []
+                materials_by_blueprint[bp.blueprint_type_id] = adj
+                # Adiciona type_ids dos materiais para a próxima iteração
+                for m in adj:
+                    to_check.add(m["type_id"])
+
+    # Carrega todos os nomes de uma vez
+    all_type_ids = checked | to_check
+    name_result = await db.execute(
+        select(Item.type_id, Item.type_name).where(Item.type_id.in_(list(all_type_ids)))
+    )
+    item_names = {r.type_id: r.type_name for r in name_result.all()}
+
+    return blueprints_by_product, materials_by_blueprint, item_names
+
+
+def _build_bom_node(
+    product_type_id: int,
+    runs: int,
+    me_level: int,
+    me_overrides: dict[int, int],
+    buy_as_is_ids: frozenset[int],
+    structure_me_bonus: float,
+    blueprints_by_product: dict[int, "Blueprint"],
+    materials_by_blueprint: dict[int, list[dict]],
+    item_names: dict[int, str],
+    _visited: frozenset[int] = frozenset(),
+    station_overrides: dict[int, int] | None = None,
+    stations_map: dict[int, float] | None = None,
+) -> BOMNode:
+    """
+    Constrói o BOM recursivamente usando dicionários pré-carregados (sem queries por nó).
+
+    `station_overrides`: {type_id: structure_id} — estação por sub-componente.
+    `stations_map`: {structure_id: me_bonus} — bônus da estrutura (pré-carregado).
+    """
+    if station_overrides is None:
+        station_overrides = {}
+    if stations_map is None:
+        stations_map = {}
+
+    effective_me = me_overrides.get(product_type_id, me_level)
+    item_name = item_names.get(product_type_id, f"Type {product_type_id}")
+
+    # Resolve bônus ME da estação para este nó (override ou global)
+    station_id = station_overrides.get(product_type_id)
+    effective_me_bonus = stations_map.get(station_id, structure_me_bonus) if station_id else structure_me_bonus
+
+    bp = blueprints_by_product.get(product_type_id)
+    if bp is None or product_type_id in _visited:
+        return BOMNode(
+            type_id=product_type_id,
+            type_name=item_name,
+            quantity=runs,
+            is_manufactured=False,
+        )
+
+    # Aplica ME do nó atual (override ou global) + bônus da estação sobre as quantidades brutas
+    raw_mats = materials_by_blueprint.get(bp.blueprint_type_id, [])
+    base_mats = [
+        {
+            "type_id":  m["type_id"],
+            "quantity": apply_me_level(m["quantity"], effective_me, effective_me_bonus),
+        }
+        for m in raw_mats
+    ]
+
+    node = BOMNode(
+        type_id=product_type_id,
+        type_name=item_name,
+        quantity=runs * bp.product_quantity,
+        is_manufactured=True,
+        blueprint_type_id=bp.blueprint_type_id,
+        blueprint_runs=runs,
+        product_per_run=bp.product_quantity,
+        me_level=effective_me,
+        station_id=station_id,
+    )
+
+    new_visited = _visited | {product_type_id}
+
+    for mat in base_mats:
+        needed = mat["quantity"] * runs
+        mat_bp = blueprints_by_product.get(mat["type_id"])
+        mat_name = item_names.get(mat["type_id"], f"Type {mat['type_id']}")
+
+        if mat["type_id"] in buy_as_is_ids:
+            child = BOMNode(
+                type_id=mat["type_id"],
+                type_name=mat_name,
+                quantity=needed,
+                is_manufactured=True,
+                buy_as_is=True,
+            )
+        elif mat_bp and mat["type_id"] not in new_visited:
+            sub_runs = math.ceil(needed / mat_bp.product_quantity)
+            child = _build_bom_node(
+                mat["type_id"], sub_runs, me_level, me_overrides,
+                buy_as_is_ids, structure_me_bonus,
+                blueprints_by_product, materials_by_blueprint, item_names,
+                new_visited,
+                station_overrides=station_overrides,
+                stations_map=stations_map,
+            )
+            child.quantity = needed
+        else:
+            child = BOMNode(
+                type_id=mat["type_id"],
+                type_name=mat_name,
+                quantity=needed,
+                is_manufactured=False,
+            )
+
+        node.children.append(child)
+
+    return node
 
 
 async def get_recursive_bom(
@@ -61,6 +273,7 @@ async def get_recursive_bom(
     me_overrides: dict[int, int] | None = None,
     buy_as_is_ids: frozenset[int] = frozenset(),
     structure_me_bonus: float = 0.0,
+    station_overrides: dict[int, int] | None = None,
     _visited: frozenset[int] = frozenset(),
 ) -> BOMNode:
     """
@@ -72,88 +285,41 @@ async def get_recursive_bom(
     `me_overrides`: {type_id: me_level} — sobrescreve o ME global por item.
     `buy_as_is_ids`: type_ids marcados pelo usuário para comprar prontos (não atomizar).
     `structure_me_bonus`: bônus ME total da estrutura em % (ex: 3.0 = -3% materiais).
+    `station_overrides`: {type_id: structure_id} — estação por sub-componente.
     Detecção de ciclos via `_visited` (não ocorre no EVE, mas é segurança).
-    """
-    from app.models.item import Item
 
+    Usa pré-carregamento em batch para evitar N+1 queries.
+    """
     if me_overrides is None:
         me_overrides = {}
+    if station_overrides is None:
+        station_overrides = {}
 
-    # ME efetivo para este item
-    effective_me = me_overrides.get(product_type_id, me_level)
-
-    # Nome do item
-    item_row = await db.execute(select(Item).where(Item.type_id == product_type_id))
-    item = item_row.scalar_one_or_none()
-    item_name = item.type_name if item else f"Type {product_type_id}"
-
-    blueprint = await get_blueprint_by_product(product_type_id, db)
-
-    if blueprint is None or product_type_id in _visited:
-        return BOMNode(
-            type_id=product_type_id,
-            type_name=item_name,
-            quantity=runs,
-            is_manufactured=False,
+    # Pré-carrega bônus das estações referenciadas em station_overrides
+    stations_map: dict[int, float] = {}
+    if station_overrides:
+        from app.models.manufacturing_structure import ManufacturingStructure
+        station_ids = list(set(station_overrides.values()))
+        res = await db.execute(
+            select(ManufacturingStructure).where(ManufacturingStructure.id.in_(station_ids))
         )
+        for s in res.scalars().all():
+            stations_map[s.id] = s.me_bonus
 
-    base_mats = await get_blueprint_materials(blueprint.blueprint_type_id, db, effective_me, structure_me_bonus)
-
-    node = BOMNode(
-        type_id=product_type_id,
-        type_name=item_name,
-        quantity=runs * blueprint.product_quantity,
-        is_manufactured=True,
-        blueprint_type_id=blueprint.blueprint_type_id,
-        blueprint_runs=runs,
-        product_per_run=blueprint.product_quantity,
-        me_level=effective_me,
+    # Pré-carrega todos os dados necessários em batch (quantidades brutas, sem ME)
+    blueprints_by_product, materials_by_blueprint, item_names = await _prefetch_bom_data(
+        product_type_id, db
     )
 
-    new_visited = _visited | {product_type_id}
-
-    for mat in base_mats:
-        needed = mat["quantity"] * runs
-        mat_bp = await get_blueprint_by_product(mat["type_id"], db)
-
-        # Buy-as-is: treat as leaf even if blueprint exists
-        if mat["type_id"] in buy_as_is_ids:
-            mat_row = await db.execute(select(Item).where(Item.type_id == mat["type_id"]))
-            mat_item = mat_row.scalar_one_or_none()
-            mat_name = mat_item.type_name if mat_item else f"Type {mat['type_id']}"
-            child = BOMNode(
-                type_id=mat["type_id"],
-                type_name=mat_name,
-                quantity=needed,
-                is_manufactured=True,  # has blueprint but user chose to buy
-                buy_as_is=True,
-            )
-        elif mat_bp and mat["type_id"] not in new_visited:
-            sub_runs = math.ceil(needed / mat_bp.product_quantity)
-            child = await get_recursive_bom(
-                mat["type_id"], db,
-                runs=sub_runs,
-                me_level=me_level,
-                me_overrides=me_overrides,
-                buy_as_is_ids=buy_as_is_ids,
-                structure_me_bonus=structure_me_bonus,
-                _visited=new_visited,
-            )
-            child.quantity = needed  # unidades necessárias pelo pai
-        else:
-            mat_row = await db.execute(select(Item).where(Item.type_id == mat["type_id"]))
-            mat_item = mat_row.scalar_one_or_none()
-            mat_name = mat_item.type_name if mat_item else f"Type {mat['type_id']}"
-            child = BOMNode(
-                type_id=mat["type_id"],
-                type_name=mat_name,
-                quantity=needed,
-                is_manufactured=False,
-            )
-
-        node.children.append(child)
-
-    return node
+    # Constrói a árvore em memória sem mais queries ao banco
+    return _build_bom_node(
+        product_type_id, runs, me_level, me_overrides,
+        buy_as_is_ids, structure_me_bonus,
+        blueprints_by_product, materials_by_blueprint, item_names,
+        _visited,
+        station_overrides=station_overrides,
+        stations_map=stations_map,
+    )
 
 
 def aggregate_bom_leaves(node: BOMNode) -> dict[int, int]:
@@ -191,6 +357,23 @@ def bom_to_display_rows(node: BOMNode, depth: int = 0) -> list[dict]:
     for child in node.children:
         rows.extend(bom_to_display_rows(child, depth + 1))
     return rows
+
+
+def enrich_bom_costs(node: BOMNode, prices_map: dict[int, float]) -> None:
+    """
+    Preenche unit_price e total_cost em toda a árvore BOM (bottom-up).
+
+    Folhas e nós buy_as_is: preço de mercado × quantidade.
+    Nós fabricados: soma dos custos dos filhos (custo de fabricação).
+    """
+    if node.is_leaf or node.buy_as_is:
+        node.unit_price = prices_map.get(node.type_id) or 0.0
+        node.total_cost = node.unit_price * node.quantity
+    else:
+        for child in node.children:
+            enrich_bom_costs(child, prices_map)
+        node.total_cost = sum(c.total_cost for c in node.children)
+        node.unit_price = node.total_cost / node.quantity if node.quantity > 0 else 0.0
 
 
 async def get_blueprint_materials(

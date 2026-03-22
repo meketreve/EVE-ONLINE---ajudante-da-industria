@@ -79,7 +79,7 @@ async def _do_crawl(
     Tenta todos os personagens disponíveis.
     Retorna dict com status, orders_fetched, pages_fetched, used_character_id.
     """
-    tokens = await _get_all_tokens(preferred_character_id, db)
+    tokens = await _get_all_tokens(preferred_character_id, db, structure_id=structure_id)
 
     orders:             list[dict] | None = None
     used_character_id:  int | None        = None
@@ -121,11 +121,12 @@ async def _do_crawl(
     # Agrega snapshots
     await _update_snapshots(db, structure_id, fetched_at)
 
-    # Atualiza status da estrutura
+    # Atualiza status da estrutura (incluindo personagem que teve sucesso)
     struct = await db.get(Structure, structure_id)
     if struct:
-        struct.status          = "market_accessible"
-        struct.last_crawled_at = fetched_at
+        struct.status                       = "market_accessible"
+        struct.last_crawled_at              = fetched_at
+        struct.last_successful_character_id = used_character_id
     await db.commit()
 
     return {
@@ -201,7 +202,8 @@ async def _upsert_orders(
     for order in orders:
         order_ids.add(order["order_id"])
 
-    # Batch upsert via INSERT OR REPLACE — commit por lote para liberar o lock de escrita
+    # Upsert de todas as ordens em lotes de 500; um único commit ao final.
+    # WAL mode permite leitores concorrentes mesmo durante a escrita longa.
     BATCH = 500
     for i in range(0, len(orders), BATCH):
         batch = orders[i : i + BATCH]
@@ -236,9 +238,9 @@ async def _upsert_orders(
                     "fetched_at":    fetched_at,
                 },
             )
-        # Commit a cada lote: libera o lock de escrita entre lotes (~1s por lote)
-        # evita segurar o lock por 30s inteiros com 21k ordens
-        await db.commit()
+
+    # Um único commit para todas as inserções — mais eficiente e atômico
+    await db.commit()
 
     return order_ids
 
@@ -352,7 +354,11 @@ async def _update_snapshots(
 # ── Limpeza de ordens stale antigas ──────────────────────────────────────────
 
 async def cleanup_stale_orders() -> int:
-    """Remove ordens stale mais antigas que STALE_DELETE_AFTER. Retorna contagem."""
+    """
+    Remove ordens stale mais antigas que STALE_DELETE_AFTER.
+    Também remove snapshots de estruturas sem ordens ativas.
+    Retorna contagem de ordens removidas.
+    """
     cutoff = datetime.utcnow() - STALE_DELETE_AFTER
     async with AsyncSessionLocal() as db:
         result = await db.execute(
@@ -363,10 +369,26 @@ async def cleanup_stale_orders() -> int:
             """),
             {"cutoff": cutoff},
         )
-        await db.commit()
         deleted = result.rowcount
         if deleted:
             logger.info("[cleanup] %d ordens stale removidas.", deleted)
+
+        # Remove snapshots de estruturas que não têm mais nenhuma ordem ativa
+        snap_result = await db.execute(
+            text("""
+                DELETE FROM market_snapshots
+                WHERE (structure_id, type_id) NOT IN (
+                    SELECT DISTINCT structure_id, type_id
+                    FROM market_orders_raw
+                    WHERE is_stale = 0
+                )
+            """),
+        )
+        snaps_deleted = snap_result.rowcount
+        if snaps_deleted:
+            logger.info("[cleanup] %d snapshots órfãos removidos.", snaps_deleted)
+
+        await db.commit()
         return deleted
 
 
@@ -406,15 +428,27 @@ async def schedule_recrawl_all() -> int:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 async def _get_all_tokens(
-    preferred_character_id: int, db: AsyncSession
+    preferred_character_id: int, db: AsyncSession, structure_id: int | None = None,
 ) -> list[tuple[int, str, str]]:
     """
     Retorna lista de (character_id, character_name, access_token) de todos os
-    personagens autenticados, com o preferido na frente.
+    personagens autenticados.
+
+    Ordem de prioridade:
+      1. last_successful_character_id da estrutura (se disponível)
+      2. preferred_character_id passado como argumento
+      3. Demais personagens ordenados por updated_at desc
     """
     from sqlalchemy import select as sa_select
     from app.models.character import Character
     from app.services.character_service import get_fresh_token
+
+    # Determina o personagem de maior prioridade (último bem-sucedido na estrutura)
+    last_successful_id: int | None = None
+    if structure_id is not None:
+        struct = await db.get(Structure, structure_id)
+        if struct and struct.last_successful_character_id:
+            last_successful_id = struct.last_successful_character_id
 
     result = await db.execute(
         sa_select(Character)
@@ -423,11 +457,15 @@ async def _get_all_tokens(
     )
     chars = result.scalars().all()
 
-    # Coloca preferido na frente
-    chars_ordered = sorted(
-        chars,
-        key=lambda c: 0 if c.character_id == preferred_character_id else 1,
-    )
+    # Ordena: last_successful primeiro, preferred segundo, resto depois
+    def _priority(c: Character) -> int:
+        if last_successful_id and c.character_id == last_successful_id:
+            return 0
+        if c.character_id == preferred_character_id:
+            return 1
+        return 2
+
+    chars_ordered = sorted(chars, key=_priority)
 
     tokens = []
     for char in chars_ordered:

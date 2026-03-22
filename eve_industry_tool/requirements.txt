@@ -1,9 +1,6 @@
-fastapi
-uvicorn[standard]
-sqlalchemy[asyncio]
-aiosqlite
-httpx
-jinja2
-python-dotenv
-python-multipart
-itsdangerous
+nicegui>=1.4.0
+pywebview>=4.0
+sqlalchemy[asyncio]>=2.0
+aiosqlite>=0.19
+httpx>=0.25
+python-dotenv>=1.0
